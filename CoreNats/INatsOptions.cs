@@ -1,0 +1,42 @@
+﻿using Microsoft.Extensions.Logging;
+
+namespace CoreNats
+{
+    using System;
+    using System.Buffers;
+    using System.Net;
+    using System.Threading.Tasks;
+
+    public interface INatsOptions
+    {        
+        string[] Servers { get; set; }
+
+        /// <summary>
+        /// If set, will be used instead of system dns
+        /// </summary>
+        Func<string, Task<IPAddress[]>> DnsResolver { get; set; }
+
+        Func<INatsOptions,INatsServerPool> ServerPoolFactory { get; set; }
+
+        NatsServerPoolFlags ServersOptions { get; set; }
+
+        int SenderQueueLength { get; }
+
+        int ReceiverQueueLength { get; }
+
+        ArrayPool<byte> ArrayPool { get; }
+
+        bool Verbose { get; }
+
+        string? AuthorizationToken { get; }
+        string? Username { get; }
+        string? Password { get; }
+
+        bool Echo { get; }
+
+        TimeSpan RequestTimeout { get; }
+        string RequestPrefix { get; }
+
+        ILoggerFactory? LoggerFactory { get; }
+    }
+}

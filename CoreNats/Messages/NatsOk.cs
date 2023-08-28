@@ -1,0 +1,14 @@
+﻿namespace CoreNats.Messages
+{
+
+
+    public class NatsOk : INatsServerMessage
+    {
+        public readonly static NatsOk Instance = new NatsOk();
+
+        
+       
+    }
+
+    
+}
