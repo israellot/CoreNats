@@ -12,17 +12,41 @@
 
         public readonly ReadOnlyMemory<byte> Memory;
         private readonly string _string;
+        internal readonly IMemoryOwner<byte>? Owner;
 
         public NatsPayload(ReadOnlyMemory<byte> value)
         {            
             Memory = value;
             _string = string.Empty;
+            Owner = null;
         }
 
         public NatsPayload(string? value)
         {
             _string = value ?? string.Empty;
             Memory = _string == string.Empty ? ReadOnlyMemory<byte>.Empty : Encoding.UTF8.GetBytes(value);
+            Owner = null;
+        }
+
+        public NatsPayload(IMemoryOwner<byte> value)
+        {
+            _string = string.Empty;
+            Memory = value.Memory;
+            Owner = value;
+        }
+
+        public NatsPayload(IMemoryOwner<byte> value,int length)
+        {
+            _string = string.Empty;
+            Memory = value.Memory.Slice(0, length);
+            Owner = value;
+        }
+
+        public NatsPayload(IMemoryOwner<byte> value,int start, int length)
+        {
+            _string = string.Empty;
+            Memory = value.Memory.Slice(start, length);
+            Owner = value;
         }
 
         public string AsString()

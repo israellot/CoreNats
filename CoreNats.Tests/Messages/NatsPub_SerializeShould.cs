@@ -21,6 +21,19 @@
         }
 
         [Fact]
+        public void BeSameWithoutReplyToOwner()
+        {            
+            var bytes = Encoding.UTF8.GetBytes("Hello NATS!");
+            var owner = MemoryPool<byte>.Shared.Rent(100).Slice(0, bytes.Length);
+            bytes.CopyTo(owner.Memory);
+                        
+            var rented = NatsPub.Serialize("FOO", NatsKey.Empty,new NatsPayload(owner));
+            var text = Encoding.UTF8.GetString(rented.Span);
+
+            Assert.Equal("PUB FOO 11\r\nHello NATS!\r\n", text);
+        }
+
+        [Fact]
         public void BeSameWithReplyTo()
         {
             var rented = NatsPub.Serialize("FRONT.DOOR", "INBOX.22", Encoding.UTF8.GetBytes("Knock Knock"));

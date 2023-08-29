@@ -32,6 +32,7 @@
 
         private Task? _readWriteAsyncTask;
         private CancellationTokenSource? _disconnectSource;
+        private CancellationTokenSource? _debugDisconnectSource;
         private ReadOnlyMemory<byte> _reconnectResendBuffer = ReadOnlyMemory<byte>.Empty;
 
         private readonly NatsPublishChannel _senderChannel;
@@ -177,7 +178,9 @@
 
                 _senderChannel.DefaultBufferLength = socket.SendBufferSize;
 
+                _debugDisconnectSource = new CancellationTokenSource();
                 using var internalDisconnect = new CancellationTokenSource();
+                
 
                 IPEndPoint ipEndpoint = null;
                 try
@@ -203,15 +206,13 @@
                 _receiverQueueSize = 0;
 
                 var readPipe = new Pipe(new PipeOptions(pauseWriterThreshold: 1024 * 1024,useSynchronizationContext:false));
-                
-                // ReSharper disable AccessToDisposedClosure
 
-                using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(disconnectToken, internalDisconnect.Token);
+                using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(disconnectToken, internalDisconnect.Token, _debugDisconnectSource.Token);
 
                 var readTask = Task.Run(() => ReadSocketAsync(socket, readPipe.Writer, combinedCts.Token), combinedCts.Token);
                 var processTask = Task.Run(() => ProcessMessagesAsync(readPipe.Reader, combinedCts.Token), combinedCts.Token);
                 var writeTask = Task.Run(() => WriteSocketAsync(socket, combinedCts.Token), combinedCts.Token);
-                // ReSharper restore AccessToDisposedClosure
+               
                 try
                 {
                     _logger?.LogTrace("Connected to {Server}", ipEndpoint);
@@ -232,7 +233,8 @@
 
                 Status = NatsStatus.Connecting;
 
-                internalDisconnect.Cancel();
+                if(!internalDisconnect.IsCancellationRequested)
+                    internalDisconnect.Cancel();
                 
                 _logger?.LogTrace("Waiting for read/write/process tasks to finish");
 
@@ -419,20 +421,16 @@
             foreach (var (id, subscription) in _inlineSubscriptions)
             {
                 _logger?.LogTrace("Resubscribing to {Subject} / {QueueGroup} / {SubscriptionId}", subscription.Subject, subscription.QueueGroup, subscription.SubscriptionId);
-
-                var sub = new NatsSub(subscription.Subject, subscription.QueueGroup, subscription.SubscriptionId);
-                var buffer =new byte[sub.Length];
-                sub.Serialize(buffer);
-
-                await socket.SendAsync(buffer, SocketFlags.None, disconnectToken);
-
-                Interlocked.Add(ref _transmitBytesTotal, buffer.Length);
+                                
+                await WriteAsync(new NatsSub(subscription.Subject, subscription.QueueGroup, subscription.SubscriptionId), disconnectToken);
             }
         }
 
         private ValueTask WriteAsync<T>(in T message, CancellationToken cancellationToken) where T: INatsClientMessage
         {
             Interlocked.Add(ref _senderQueueSize, message.Length);
+
+            
 
             return _senderChannel.Publish(message, cancellationToken);
         }
@@ -521,6 +519,25 @@
             await InternalSubscribe(subject, process, queueGroup, cancellationToken);
         }
 
+        public INatsUnsubscriber Subscribe(NatsKey subject, NatsMessageProcess process, NatsKey? queueGroup = null)
+        {
+            var unsubscriber = new NatsUnsubscriber();
+
+            _= InternalSubscribe(subject, process, queueGroup, unsubscriber.Token);
+
+            return unsubscriber;
+        }
+
+        internal void DebugSimulateDisconnection()
+        {
+            try
+            {
+                _debugDisconnectSource?.Cancel();
+            }
+            catch { }
+        }
     }
+
+    
 
 }

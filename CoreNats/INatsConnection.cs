@@ -27,6 +27,6 @@
         ValueTask DisconnectAsync();
         ValueTask PublishAsync(in NatsKey subject, in NatsPayload? payload = null, in NatsKey? replyTo = null, in NatsMsgHeaders? headers = null, CancellationToken cancellationToken = default);
         ValueTask SubscribeAsync(NatsKey subject, NatsMessageProcess process, NatsKey? queueGroup = null, CancellationToken cancellationToken = default);
-
+        INatsUnsubscriber Subscribe(NatsKey subject, NatsMessageProcess process, NatsKey? queueGroup = null);
     }
 }

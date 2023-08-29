@@ -2,6 +2,8 @@
 {
     using System;
     using System.Buffers;
+    using System.IO;
+    using System.Runtime.InteropServices;
 
     public readonly struct NatsMemoryOwner
     {
@@ -35,5 +37,70 @@
 
     }
 
+    internal class ProxyOwner<T> : IMemoryOwner<T>
+    {
+        public Memory<T> Memory => _memory;
+
+        public ReadOnlyMemory<T> ReadOnlyMemory => _memory;
+
+        public IMemoryOwner<T> Parent => _owner;
+
+
+        private Memory<T> _memory;
+
+
+        private IMemoryOwner<T> _owner;
+
+        public ProxyOwner(IMemoryOwner<T> owner, Memory<T> memory)
+        {
+            _memory = memory;
+            _owner = owner;
+        }
+
+        public ProxyOwner(IMemoryOwner<T> owner)
+        {
+            _memory = owner.Memory;
+            _owner = owner;
+        }
+
+        object _disposeLock = new object();
+        bool _disposed;
+        public void Dispose()
+        {
+            if (_disposed) return;
+            lock (_disposeLock)
+            {
+                if (_disposed) return;
+                _disposed = true;
+
+                _owner?.Dispose();
+                _owner = null;
+                _memory = null;
+            }
+
+        }
+
+    }
+
+    internal static class MemoryOwnerExtensions
+    {
+        public static IMemoryOwner<T> Slice<T>(this IMemoryOwner<T> o, int start)
+        {
+            if (start > 0)
+                return new ProxyOwner<T>(o, o.Memory.Slice(start));
+            else
+                return o;
+        }
+
+        public static IMemoryOwner<T> Slice<T>(this IMemoryOwner<T> o, int start, int length)
+        {
+            if (start == 0 && o.Memory.Length == length)
+                return o;
+            else
+                return new ProxyOwner<T>(o, o.Memory.Slice(start, length));
+        }
+
+        
+    }
 
 }

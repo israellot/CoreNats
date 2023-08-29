@@ -72,7 +72,7 @@
             Console.WriteLine();
 
             //goto skip;
-        
+
             //This first test sends a precomputed large buffer of 100mb 
             //It should get us a figure close to what NATS can ingest and drop
             Console.WriteLine("---Publish only ( raw )---");
@@ -164,7 +164,7 @@
         {
             try
             {
-                await RunBenchmarkInner(publishers, subscribers, messageSize, msgPerSecond, writerGenerate);        
+                await RunBenchmarkInner(publishers, subscribers, messageSize, msgPerSecond, writerGenerate, duration, subject);        
             }
             catch(Exception ex)
             {
@@ -189,7 +189,7 @@
 
             await writerConnection.ConnectAsync();
             await readerConnection.ConnectAsync();
-
+            
             var count = 0;
             while (writerConnection.Status != NatsStatus.Connected)
             {
@@ -328,7 +328,7 @@
 
             Console.Write($"{messagesPerSecond / 1000:f1}k msg/s\t{bytesPerSecond / 1000_0000:f2} MB/s");
             if (subscribers > 0)
-                Console.Write($"Lat: {latencyMean:f2}ms {latencyMax:f2}ms {latencyMin:f2}ms");
+                Console.Write($" Lat: {latencyMean:f2}ms {latencyMax:f2}ms {latencyMin:f2}ms");
 
             Console.Write("\r\n");
 

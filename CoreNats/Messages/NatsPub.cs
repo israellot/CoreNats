@@ -70,17 +70,22 @@
             }
 
             _end.Span.CopyTo(buffer.Slice(consumed));
+
+            _payload.Owner?.Dispose();
         }
 
         //test and debug only
-        public static ReadOnlyMemory<byte> Serialize(in NatsKey subject, in NatsKey replyTo, in NatsPayload payload)
+        internal static ReadOnlyMemory<byte> Serialize(in NatsKey subject, in NatsKey replyTo, in NatsPayload payload)
         {
             var pub = new NatsPub(subject, replyTo, payload);
             var buffer = new byte[pub.Length];
             pub.Serialize(buffer);
 
+            payload.Owner?.Dispose();
+
             return buffer;
         }
       
+        
     }
 }

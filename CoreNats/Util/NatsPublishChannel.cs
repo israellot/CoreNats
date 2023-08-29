@@ -37,7 +37,7 @@
             return PublishInternal(msg, cancellationToken);
         }
 
-        public async ValueTask PublishInternal<T>(T msg, CancellationToken cancellationToken) where T : INatsClientMessage
+        private async ValueTask PublishInternal<T>(T msg, CancellationToken cancellationToken) where T : INatsClientMessage
         {
             var current = _current;
             var currentVersion = _version;
@@ -46,7 +46,7 @@
             while (!current.TryWrite(msg, out messageIndex))
             {
                 await _channel.Writer.WaitToWriteAsync().ConfigureAwait(false);
-
+                                
                 lock (_lock)
                 {
                     if (currentVersion == _version)
@@ -62,7 +62,6 @@
                 currentVersion = _version;
             }
 
-            //at this point message was written
             if (messageIndex == 0)
             {
                 //if wrote first message on buffer, enqueue

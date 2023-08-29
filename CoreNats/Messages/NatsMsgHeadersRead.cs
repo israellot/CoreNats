@@ -7,11 +7,13 @@
 
     public readonly struct NatsMsgHeadersRead
     {
-        public static readonly NatsMsgHeadersRead Empty = new NatsMsgHeadersRead();
+        public static readonly NatsMsgHeadersRead Empty = new NatsMsgHeadersRead(ReadOnlyMemory<byte>.Empty);
+        public bool IsEmpty => _headers.Count() == 0;
 
         private static readonly ReadOnlyMemory<byte> _protocolVersion = new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes("NATS/1.0\r\n"));
 
         private readonly IEnumerable<KeyValuePair<ReadOnlyMemory<byte>, ReadOnlyMemory<byte>>> _headers;
+
         public NatsMsgHeadersRead(ReadOnlyMemory<byte> data)
         {
             if (data.IsEmpty)
