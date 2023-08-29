@@ -64,13 +64,13 @@
 
         public async ValueTask Commit()
         {
-            bool commited = _commit == false;
+            bool committed = _commit == false;
             lock (_lock)
             {
                 _commit = true;
             }
 
-            if (commited)
+            if (committed)
                 OnCommit?.Invoke();
 
             var count = 2048;
