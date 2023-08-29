@@ -14,6 +14,8 @@
     using Microsoft.Extensions.Logging;
     using System.Collections.Concurrent;
     using System.Net;
+    using System.Buffers;
+    using System.Diagnostics;
 
     public class NatsConnection : INatsConnection
     {
@@ -182,7 +184,7 @@
                 using var internalDisconnect = new CancellationTokenSource();
                 
 
-                IPEndPoint ipEndpoint = null;
+                IPEndPoint? ipEndpoint = null;
                 try
                 {
                     ipEndpoint = await _serverPool.SelectServer(_isRetry);
@@ -215,9 +217,7 @@
                
                 try
                 {
-                    _logger?.LogTrace("Connected to {Server}", ipEndpoint);
-
-                    Status = NatsStatus.Connected;
+                    _logger?.LogTrace("Socket Connected to {Server}", ipEndpoint);
 
                     await Task.WhenAny(new[] { readTask, processTask, writeTask });
                 }
@@ -299,7 +299,8 @@
                 if (read.IsCanceled) break;
                 do
                 {                    
-                    var parsedCount = parser.ParseMessages(read.Buffer, parsedMessageBuffer, out var consumed,out var inlined);                    
+                    var parsedCount = parser.ParseMessages(read.Buffer, parsedMessageBuffer, out var consumed,out var inlined);
+
                     reader.AdvanceTo(read.Buffer.GetPosition(consumed));
 
                     Interlocked.Add(ref _receivedMessagesTotal, inlined);
@@ -323,12 +324,20 @@
                             case NatsInformation info:
                                 _logger?.LogTrace("Received connection information for {Server}, {ConnectionInformation}", info.Host, info);
 
+                                if(Status!= NatsStatus.Connected)
+                                {
+                                    _logger?.LogTrace("Authenticated Connected to {Server}", info.Host);
+
+                                    Status = NatsStatus.Connected;
+                                }                                
+
                                 NatsInformation = info;
 
                                 _serverPool.SetDiscoveredServers(info.ConnectUrls);
 
                                 ConnectionInformation?.Invoke(this, info);
-                                break;                            
+                                break;
+                            
                         }
                     }
                 } while (reader.TryRead(out read));
@@ -343,7 +352,7 @@
             ChannelReader<NatsPublishBuffer> reader = _senderChannel.Reader;
 
             await SendConnect(socket, disconnectToken);
-            await Resubscribe(socket, disconnectToken);
+            await Resubscribe(disconnectToken);
 
             if (_reconnectResendBuffer.Length > 0)
             {
@@ -416,13 +425,13 @@
             await socket.SendAsync(buffer, SocketFlags.None, disconnectToken);
         }
 
-        private async Task Resubscribe(Socket socket, CancellationToken disconnectToken)
+        private async Task Resubscribe(CancellationToken? disconnectToken=null)
         {
             foreach (var (id, subscription) in _inlineSubscriptions)
             {
                 _logger?.LogTrace("Resubscribing to {Subject} / {QueueGroup} / {SubscriptionId}", subscription.Subject, subscription.QueueGroup, subscription.SubscriptionId);
                                 
-                await WriteAsync(new NatsSub(subscription.Subject, subscription.QueueGroup, subscription.SubscriptionId), disconnectToken);
+                await WriteAsync(new NatsSub(subscription.Subject, subscription.QueueGroup, subscription.SubscriptionId), disconnectToken??CancellationToken.None);
             }
         }
 

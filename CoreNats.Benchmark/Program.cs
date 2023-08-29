@@ -7,6 +7,7 @@
     using System.Diagnostics.Metrics;
     using System.Linq;
     using System.Runtime;
+    using System.Runtime.CompilerServices;
     using System.Runtime.InteropServices;
     using System.Text.Json;
     using System.Threading;
@@ -126,7 +127,7 @@
             }
             Console.WriteLine();
             
-
+            
             //Here we add 99 more unrelated subscriptions
             Console.WriteLine("---Roundtrip 1 pub 100 sub---");
             messageSizes = new[] { 8, 32, 128, 512, 1024 };
@@ -348,7 +349,7 @@
                 var batch = msgPerSecond >= 500_000 ? 100 : msgPerSecond>=100_000?10:1;
                 var delay = msgPerSecond > 0 ? (long)(Stopwatch.Frequency * batch / msgPerSecond) : 0;
 
-                var targetPerMessage = delay / batch;
+                var targetPerMessage = (double)delay / batch;
                 
                 var messageCount = 0;
 
@@ -359,6 +360,9 @@
                 NatsKey subjectUtf8 = new NatsKey(subject);
 
                 var start = Stopwatch.GetTimestamp();
+
+                //var headers = new Dictionary<string, string>() { ["a"] = "b", ["abc"] = "def" };
+                // var headers = new Dictionary<string, string>();
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
@@ -375,7 +379,7 @@
 
                     var elapsed = Stopwatch.GetTimestamp() - now;
 
-                    var perMessage = (Stopwatch.GetTimestamp() - start) / messageCount;
+                    var perMessage = (Stopwatch.GetTimestamp() - start) / (double)messageCount;
 
                     while(perMessage < targetPerMessage)
                     {
@@ -383,7 +387,7 @@
                         var waitMs = (double)wait *1000/ Stopwatch.Frequency;
 
                         if (waitMs >= 1)
-                            await Task.Delay((int)waitMs);
+                            await Task.Delay((int)Math.Floor(waitMs));
                         else
                             break; //let speed up
 

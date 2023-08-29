@@ -7,6 +7,8 @@
 
     public readonly struct NatsMemoryOwner
     {
+        public static readonly NatsMemoryOwner Empty= new NatsMemoryOwner(new byte[0]);
+
         public readonly Memory<byte> Memory;
 
         private readonly ArrayPool<byte>? _owner;        
@@ -43,13 +45,13 @@
 
         public ReadOnlyMemory<T> ReadOnlyMemory => _memory;
 
-        public IMemoryOwner<T> Parent => _owner;
+        public IMemoryOwner<T>? Parent => _owner;
 
 
         private Memory<T> _memory;
 
 
-        private IMemoryOwner<T> _owner;
+        private IMemoryOwner<T>? _owner;
 
         public ProxyOwner(IMemoryOwner<T> owner, Memory<T> memory)
         {

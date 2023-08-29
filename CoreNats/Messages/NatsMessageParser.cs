@@ -229,7 +229,7 @@
                 currentByte = Unsafe.Add(ref lineRef, pointer);
             } while (currentByte != ' ');
 
-            if (reader.Remaining < totalSize + 2) return null;
+            
 
             pointer--;
 
@@ -268,9 +268,7 @@
                 pointer--;
             }
             var payloadSize = totalSize - headerSize;
-
-            
-
+                        
             //sid
             long sid = 0;
             pointer = (splitCount == 1) ? headerSizeEnd : splits[0] - 1;
@@ -286,7 +284,7 @@
 
             //done with first line
 
-           
+            if (reader.Remaining < payloadSize + headerSize + 2) return null;
 
             if (_inlineSubscriptions.TryGetValue(sid, out var inlineSubscription))
             {
@@ -308,29 +306,34 @@
                     subject = new NatsInlineKey(line.Slice(5, splits[1] - 5));
                 }
 
-                if (payloadSize > 0)
+                var linePlusHeaderSize = line.Length + 2 + headerSize;
+
+                NatsMemoryOwner headerBuffer = NatsMemoryOwner.Empty;
+                var headerSlice = reader.Sequence.Slice(reader.Position, headerSize);
+                if (headerSlice.IsSingleSegment)
                 {
-                    var payloadSequence = reader.Sequence.Slice(headerSize, payloadSize);
-                    payload = payloadSequence;
+                    headers = new NatsMsgHeadersRead(headerSlice.First);
                 }
-
-
-                if (reader.Sequence.First.Length >= headerSize)
-                {
-                    var headerData = reader.Sequence.First.Slice(0, headerSize);
-                    headers = new NatsMsgHeadersRead(headerData);
-                }                    
                 else
                 {
-                    var headerBuffer = new byte[headerSize];
-                    reader.Sequence.Slice(0, headerSize).CopyTo(headerBuffer);
-                    headers = new NatsMsgHeadersRead(headerBuffer);
+                    headerBuffer = _memoryPool.Rent(headerSize);
+                    headerSlice.CopyTo(headerBuffer.Memory.Span);
+                    headers = new NatsMsgHeadersRead(headerBuffer.Memory);
+                }
+
+                if (payloadSize > 0)
+                {                    
+                    var payloadSequence = reader.Sequence.Slice(reader.Position).Slice(headerSize, payloadSize);
+                    payload = payloadSequence;
                 }
 
                 var message = new NatsInlineMsg(ref subject, ref replyTo, sid, payload, headers);
 
                 inlineSubscription.Process(ref message);
-                reader.Advance(payloadSize + 2);
+
+                headerBuffer.Return();
+
+                reader.Advance(headerSize+payloadSize + 2);
 
                 return null;
 
