@@ -162,7 +162,7 @@
 
                 var message = new NatsInlineMsg(ref subject, ref replyTo, sid, payload, NatsMsgHeadersRead.Empty);
 
-                inlineSubscription.Process(ref message);
+                inlineSubscription.Process?.Invoke(ref message);
 
                 reader.Advance(payloadSize + 2);
 
@@ -329,7 +329,7 @@
 
                 var message = new NatsInlineMsg(ref subject, ref replyTo, sid, payload, headers);
 
-                inlineSubscription.Process(ref message);
+                inlineSubscription.Process?.Invoke(ref message);
 
                 headerBuffer.Return();
 
