@@ -207,7 +207,7 @@
                 _isRetry = false;
                 _receiverQueueSize = 0;
 
-                var readPipe = new Pipe(new PipeOptions(pauseWriterThreshold: 1024 * 1024,useSynchronizationContext:false));
+                var readPipe = new Pipe(new PipeOptions(pauseWriterThreshold: 0,useSynchronizationContext:false));
 
                 using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(disconnectToken, internalDisconnect.Token, _debugDisconnectSource.Token);
 
@@ -217,6 +217,7 @@
                
                 try
                 {
+                    Status = NatsStatus.Connected;
                     _logger?.LogTrace("Socket Connected to {Server}", ipEndpoint);
 
                     await Task.WhenAny(new[] { readTask, processTask, writeTask });
@@ -327,9 +328,7 @@
                                 if(Status!= NatsStatus.Connected)
                                 {
                                     _logger?.LogTrace("Authenticated Connected to {Server}", info.Host);
-
-                                    Status = NatsStatus.Connected;
-                                }                                
+                                }
 
                                 NatsInformation = info;
 
@@ -352,13 +351,20 @@
             ChannelReader<NatsPublishBuffer> reader = _senderChannel.Reader;
 
             await SendConnect(socket, disconnectToken);
-            await Resubscribe(disconnectToken);
+            //await Resubscribe(disconnectToken);
 
             if (_reconnectResendBuffer.Length > 0)
             {
                 _logger?.LogTrace("Sending saved reconnect resend buffer");
-                await SocketSend(_reconnectResendBuffer);
-                _reconnectResendBuffer = ReadOnlyMemory<byte>.Empty;
+                try
+                {
+                    await SocketSend(_reconnectResendBuffer, disconnectToken);
+                }
+                finally
+                {
+                    //only retry once
+                    _reconnectResendBuffer = ReadOnlyMemory<byte>.Empty;
+                }
             }
 
             while (!disconnectToken.IsCancellationRequested)
@@ -374,7 +380,7 @@
 
                         Interlocked.Add(ref _senderQueueSize, -memory.Length);
 
-                        await SocketSend(memory);
+                        await SocketSend(memory, disconnectToken);
 
                         Interlocked.Add(ref _transmitMessagesTotal, chunk.Messages);
                         Interlocked.Add(ref _transmitBytesTotal, memory.Length);
@@ -389,12 +395,12 @@
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
 
-            async ValueTask<int> SocketSend(ReadOnlyMemory<byte> data)
+            async ValueTask<int> SocketSend(ReadOnlyMemory<byte> data, CancellationToken disconnectToken)
             {
                 int sent = 0;
                 try
                 {
-                    sent = await socket.SendAsync(data, SocketFlags.None, CancellationToken.None).ConfigureAwait(false);
+                    sent = await socket.SendAsync(data, SocketFlags.None, disconnectToken).ConfigureAwait(false);
 
                     //it seems there's no chance sent can be < data length for send success
                     return sent;
@@ -402,12 +408,15 @@
                 catch (Exception ex) {
                     _logger?.LogError(ex,"Error trying to write to socket");
 
-                    if (sent < data.Length && data.Length<= socket.SendBufferSize)
+                    //only save reconnect buffer if nothing transmitted
+                    
+                    //the risk is having partial messages in the buffer
+                    if (sent == 0 && data.Length<= socket.SendBufferSize)
                     {
                         _logger?.LogTrace("Saving reconnect resend buffer");
 
-                        var buffer = new byte[data.Length - sent];
-                        data.Slice(sent).CopyTo(buffer);
+                        var buffer = new byte[data.Length];
+                        data.CopyTo(buffer);
                         _reconnectResendBuffer = buffer;
 
                         throw new SocketException();
@@ -421,26 +430,47 @@
         private async Task SendConnect(Socket socket, CancellationToken disconnectToken)
         {
             var connect = new NatsConnect(Options);
-            var buffer = NatsConnect.Serialize(connect);
-            await socket.SendAsync(buffer, SocketFlags.None, disconnectToken);
-        }
+            var connectBuffer = NatsConnect.Serialize(connect);
 
-        private async Task Resubscribe(CancellationToken? disconnectToken=null)
-        {
+            var totalSize = connectBuffer.Length;
+            List<NatsSub> subs = new();
             foreach (var (id, subscription) in _inlineSubscriptions)
             {
                 _logger?.LogTrace("Resubscribing to {Subject} / {QueueGroup} / {SubscriptionId}", subscription.Subject, subscription.QueueGroup, subscription.SubscriptionId);
-                                
-                await WriteAsync(new NatsSub(subscription.Subject, subscription.QueueGroup, subscription.SubscriptionId), disconnectToken??CancellationToken.None);
+
+                var sub = new NatsSub(subscription.Subject, subscription.QueueGroup, subscription.SubscriptionId);
+                subs.Add(sub);
+                totalSize += sub.Length;
             }
+
+            //resubscribe
+            if (subs.Count > 0)
+            {
+                var ms = _memoryPool.Rent(totalSize);
+                var memory = ms.Memory;
+                connectBuffer.CopyTo(ms.Memory);
+
+                memory=memory.Slice(connectBuffer.Length);
+                foreach (var sub in subs)
+                {
+                    sub.Serialize(memory.Span);
+                    memory = memory.Slice(sub.Length);
+                }
+
+                await socket.SendAsync(ms.Memory, SocketFlags.None, disconnectToken);
+            }
+            else
+            {
+                await socket.SendAsync(connectBuffer, SocketFlags.None, disconnectToken);
+
+            }
+
         }
 
         private ValueTask WriteAsync<T>(in T message, CancellationToken cancellationToken) where T: INatsClientMessage
         {
             Interlocked.Add(ref _senderQueueSize, message.Length);
-
-            
-
+                        
             return _senderChannel.Publish(message, cancellationToken);
         }
 

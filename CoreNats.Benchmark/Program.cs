@@ -9,19 +9,33 @@
     using System.Runtime;
     using System.Runtime.CompilerServices;
     using System.Runtime.InteropServices;
+    using System.Text;
     using System.Text.Json;
     using System.Threading;
     using System.Threading.Tasks;
     using CoreNats;
     using CoreNats.Messages;
-
-
+    using Microsoft.Extensions.Logging;
+    using Microsoft.Extensions.Options;
+    using static System.Runtime.InteropServices.JavaScript.JSType;
 
     class Program
     {
+        static ILoggerFactory _loggerFactory;
+        
+
         static async Task Main(string[] args)
         {
-           
+            _loggerFactory = LoggerFactory.Create(builder =>
+                builder
+                .SetMinimumLevel(LogLevel.Trace)
+                .AddDebug()
+            );
+
+            while(true)
+                await RunBenchmark(1, 1, 1000_000, 1_000_000,true,TimeSpan.FromSeconds(20));
+
+
             var messageSizes = new[] { 0,8, 16, 32, 64, 128, 256, 512, 1024 };
 
             //args = new[] { "writer","32", "benchmark" };
@@ -72,7 +86,7 @@
 
             Console.WriteLine();
 
-            //goto skip;
+            goto skip;
 
             //This first test sends a precomputed large buffer of 100mb 
             //It should get us a figure close to what NATS can ingest and drop
@@ -113,7 +127,7 @@
             }
             Console.WriteLine();
 
-        //skip:
+        skip:
             //Here we target a specific message/sec target rate at the writer task
             messageSizes = new[] { 8, 32, 128, 512, 1024 };
             Console.WriteLine("---Roundtrip 1 pub 1 sub---");
@@ -181,10 +195,11 @@
             Console.Write($"Target {(msgPerSecond>0?(msgPerSecond / 1000).ToString("0000")+ "k msg/s" : "flood\t")}\t{messageSize} B\t{publishers} pub\t{subscribers} sub : ");
 
             var options = new NatsDefaultOptions();
+            options.LoggerFactory = _loggerFactory;
 
             var writerConnection = new NatsConnection(options);           
             var readerConnection = new NatsConnection(options);
-            
+                        
             var writerCts = new CancellationTokenSource();
             var readerCts = new CancellationTokenSource();
 
@@ -362,7 +377,19 @@
                 var start = Stopwatch.GetTimestamp();
 
                 //var headers = new Dictionary<string, string>() { ["a"] = "b", ["abc"] = "def" };
-                // var headers = new Dictionary<string, string>();
+                var headers = new Dictionary<string, string>();
+
+                for(var i = 0; i < Random.Shared.Next(1, 50);i++)
+                {
+                    var hsize = Random.Shared.Next(1, 30);
+                    var sb = new StringBuilder();
+                    for(var j=0; j < hsize; j++)
+                    {
+                        sb.Append(Guid.NewGuid().ToString("N"));
+                    }
+
+                    headers[Guid.NewGuid().ToString("N")]=sb.ToString();
+                }
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
@@ -370,7 +397,7 @@
                     for (var i = batch - 1; i >= 0; i--)
                     {
                         BitConverter.TryWriteBytes(message, Stopwatch.GetTimestamp());
-                        await connection.PublishAsync(subjectUtf8, message, cancellationToken: CancellationToken.None);
+                        await connection.PublishAsync(subjectUtf8, message, headers: headers, cancellationToken: CancellationToken.None);
                     }
 
                     messageCount += batch;

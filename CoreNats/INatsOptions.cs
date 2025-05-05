@@ -20,10 +20,6 @@ namespace CoreNats
 
         NatsServerPoolFlags ServersOptions { get; set; }
 
-        int SenderQueueLength { get; }
-
-        int ReceiverQueueLength { get; }
-
         ArrayPool<byte> ArrayPool { get; }
 
         bool Verbose { get; }
@@ -33,9 +29,6 @@ namespace CoreNats
         string? Password { get; }
 
         bool Echo { get; }
-
-        TimeSpan RequestTimeout { get; }
-        string RequestPrefix { get; }
 
         ILoggerFactory? LoggerFactory { get; }
     }
