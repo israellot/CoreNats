@@ -20,6 +20,7 @@ namespace CoreNats
             Serializer = new NatsDefaultSerializer();
             ArrayPool = ArrayPool<byte>.Create(1024*1024, 1024);
             Echo = true;
+            ConnectTimeout = TimeSpan.FromSeconds(5) ;
         }
 
         public string[] Servers { get; set; }
@@ -32,6 +33,7 @@ namespace CoreNats
         public string? Username { get; set; }
         public string? Password { get; set; }
         public bool Echo { get; set; }
+        public TimeSpan ConnectTimeout { get; set; } 
         public ILoggerFactory? LoggerFactory { get; set; }
         public Func<INatsOptions, INatsServerPool> ServerPoolFactory { get; set; }
     }

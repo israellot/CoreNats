@@ -77,8 +77,7 @@
                        serialized.Length +
                        _end.Length;
 
-            var rented = new byte[hint];
-            var buffer = rented.AsMemory();
+            Memory<byte> buffer = new byte[hint];
             _command.CopyTo(buffer);
             var consumed = _command.Length;
 
@@ -86,7 +85,7 @@
             consumed += serialized.Length;
 
             _end.CopyTo(buffer.Slice(consumed));
-            return rented;
+            return buffer;
         }
 
         

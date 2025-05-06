@@ -35,17 +35,16 @@
         private Task? _readWriteAsyncTask;
         private CancellationTokenSource? _disconnectSource;
         private CancellationTokenSource? _debugDisconnectSource;
+        private TaskCompletionSource<bool>? _connectionInfoTcs;
         private ReadOnlyMemory<byte> _reconnectResendBuffer = ReadOnlyMemory<byte>.Empty;
 
         private readonly NatsPublishChannel _senderChannel;
         private readonly NatsMemoryPool _memoryPool;
-        //private readonly ConcurrentDictionary<long, Subscription> _subscriptions = new ConcurrentDictionary<long, Subscription>();
         private readonly ConcurrentDictionary<long, InlineSubscription> _inlineSubscriptions = new ConcurrentDictionary<long, InlineSubscription>();
 
         private class Subscription
         {
-            // Not sure if we need to keep a reference to Channel or not
-            // ReSharper disable once PrivateFieldCanBeConvertedToLocalVariable
+            
             private readonly Channel<NatsMsg> _channel;
 
             public Subscription(NatsKey subject, NatsKey? queueGroup, long subscriptionId, int queueLength)
@@ -228,6 +227,15 @@
                 catch (Exception ex)
                 {
                     _logger?.LogError(ex, "Exception in the connection loop");
+                    
+                    if(readTask.Exception is not null)
+                        _logger?.LogError(readTask.Exception, "Exception in read task");
+
+                    if(processTask.Exception is not null)
+                        _logger?.LogError(processTask.Exception, "Exception in process task");
+
+                    if(writeTask.Exception is not null)
+                        _logger?.LogError(writeTask.Exception, "Exception in write task");
 
                     ConnectionException?.Invoke(this, ex);
                 }
@@ -325,7 +333,7 @@
                             case NatsInformation info:
                                 _logger?.LogTrace("Received connection information for {Server}, {ConnectionInformation}", info.Host, info);
 
-                                if(Status!= NatsStatus.Connected)
+                                if (Status!= NatsStatus.Connected)
                                 {
                                     _logger?.LogTrace("Authenticated Connected to {Server}", info.Host);
                                 }
@@ -333,6 +341,8 @@
                                 NatsInformation = info;
 
                                 _serverPool.SetDiscoveredServers(info.ConnectUrls);
+
+                                _connectionInfoTcs?.TrySetResult(true);
 
                                 ConnectionInformation?.Invoke(this, info);
                                 break;
@@ -351,7 +361,7 @@
             ChannelReader<NatsPublishBuffer> reader = _senderChannel.Reader;
 
             await SendConnect(socket, disconnectToken);
-            //await Resubscribe(disconnectToken);
+           
 
             if (_reconnectResendBuffer.Length > 0)
             {
@@ -365,6 +375,8 @@
                     //only retry once
                     _reconnectResendBuffer = ReadOnlyMemory<byte>.Empty;
                 }
+               
+
             }
 
             while (!disconnectToken.IsCancellationRequested)
@@ -395,12 +407,12 @@
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
 
-            async ValueTask<int> SocketSend(ReadOnlyMemory<byte> data, CancellationToken disconnectToken)
+            async ValueTask<int> SocketSend(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
             {
                 int sent = 0;
                 try
                 {
-                    sent = await socket.SendAsync(data, SocketFlags.None, disconnectToken).ConfigureAwait(false);
+                    sent = await socket.SendAsync(data, SocketFlags.None, cancellationToken).ConfigureAwait(false);
 
                     //it seems there's no chance sent can be < data length for send success
                     return sent;
@@ -443,6 +455,16 @@
                 totalSize += sub.Length;
             }
 
+            var localConnectionInfoTcs= new TaskCompletionSource<bool>();
+            _connectionInfoTcs = localConnectionInfoTcs;
+
+            var timeout = Options.ConnectTimeout;
+            if(timeout<=TimeSpan.Zero)
+                timeout= TimeSpan.FromSeconds(5);
+
+            _ =Task.Delay(timeout)
+                .ContinueWith(t=> localConnectionInfoTcs.TrySetResult(false), TaskContinuationOptions.ExecuteSynchronously);
+
             //resubscribe
             if (subs.Count > 0)
             {
@@ -465,12 +487,21 @@
 
             }
 
+            await _connectionInfoTcs.Task;
+            var connected = _connectionInfoTcs.Task.Result;
+            if (!connected)
+            {
+                throw new TimeoutException("Connect Timeout");
+            }
+
         }
+
+        
 
         private ValueTask WriteAsync<T>(in T message, CancellationToken cancellationToken) where T: INatsClientMessage
         {
             Interlocked.Add(ref _senderQueueSize, message.Length);
-                        
+
             return _senderChannel.Publish(message, cancellationToken);
         }
 

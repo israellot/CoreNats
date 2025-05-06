@@ -23,12 +23,11 @@ namespace CoreNats
         ArrayPool<byte> ArrayPool { get; }
 
         bool Verbose { get; }
-
         string? AuthorizationToken { get; }
         string? Username { get; }
         string? Password { get; }
-
         bool Echo { get; }
+        TimeSpan ConnectTimeout { get; }
 
         ILoggerFactory? LoggerFactory { get; }
     }

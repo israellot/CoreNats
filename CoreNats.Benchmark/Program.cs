@@ -32,8 +32,8 @@
                 .AddDebug()
             );
 
-            while(true)
-                await RunBenchmark(1, 1, 1000_000, 1_000_000,true,TimeSpan.FromSeconds(20));
+            //while(true)
+            //    await RunBenchmark(1, 1, 1000_000, 1_000_000,true,TimeSpan.FromSeconds(20));
 
 
             var messageSizes = new[] { 0,8, 16, 32, 64, 128, 256, 512, 1024 };
@@ -86,7 +86,7 @@
 
             Console.WriteLine();
 
-            goto skip;
+            //goto skip;
 
             //This first test sends a precomputed large buffer of 100mb 
             //It should get us a figure close to what NATS can ingest and drop
@@ -195,6 +195,7 @@
             Console.Write($"Target {(msgPerSecond>0?(msgPerSecond / 1000).ToString("0000")+ "k msg/s" : "flood\t")}\t{messageSize} B\t{publishers} pub\t{subscribers} sub : ");
 
             var options = new NatsDefaultOptions();
+            options.Servers = new string[] { "localhost:4222" };
             options.LoggerFactory = _loggerFactory;
 
             var writerConnection = new NatsConnection(options);           
