@@ -19,6 +19,8 @@
 
     public class NatsConnection : INatsConnection
     {
+        public string Id { get; private set; }
+
         public NatsInformation? NatsInformation { get; private set; }
 
         private static long _nextSubscriptionId = 1;
@@ -35,7 +37,7 @@
         private Task? _readWriteAsyncTask;
         private CancellationTokenSource? _disconnectSource;
         private CancellationTokenSource? _debugDisconnectSource;
-        private TaskCompletionSource<bool>? _connectionInfoTcs;
+        private TaskCompletionSource<bool> _connectionInfoTcs;
         private ReadOnlyMemory<byte> _reconnectResendBuffer = ReadOnlyMemory<byte>.Empty;
 
         private readonly NatsPublishChannel _senderChannel;
@@ -49,6 +51,7 @@
 
             public Subscription(NatsKey subject, NatsKey? queueGroup, long subscriptionId, int queueLength)
             {
+               
                 Subject = subject;
                 QueueGroup = queueGroup ?? NatsKey.Empty;
                 SubscriptionId = subscriptionId;
@@ -105,7 +108,7 @@
             get => _status;
             private set
             {
-                _logger?.LogTrace("NatsConnection status changed from {Previous} to {Status}", _status, value);
+                _logger?.LogTrace("[{Id}] NatsConnection status changed from {Previous} to {Status}",Id, _status, value);
 
                 _status = value;
                 StatusChange?.Invoke(this, value);
@@ -130,6 +133,8 @@
 
         public NatsConnection(INatsOptions options)
         {
+            Id = Guid.NewGuid().ToString("N").Substring(0,6);
+
             Options = options;
 
             _memoryPool = new NatsMemoryPool(options.ArrayPool);
@@ -141,19 +146,23 @@
             _logger = options.LoggerFactory?.CreateLogger<NatsConnection>();
 
             _serverPool = options.ServerPoolFactory(options);
+
+            _logger?.LogError("[{Id}] Connection created", Id);
+
+            _connectionInfoTcs = new TaskCompletionSource<bool>();
         }
 
         public ValueTask ConnectAsync()
         {
             if (_disposeTokenSource.IsCancellationRequested)
             {
-                _logger?.LogError("Connection already disposed");
+                _logger?.LogError("[{Id}] Connection already disposed",Id);
                 throw new ObjectDisposedException("Connection already disposed");
             }
 
             if (_disconnectSource != null)
             {
-                _logger?.LogError("Already connected");
+                _logger?.LogError("[{Id}] Already connected",Id);
                 throw new InvalidAsynchronousStateException("Already connected");
             }
 
@@ -166,7 +175,7 @@
 
         private async Task ReadWriteAsync(CancellationToken disconnectToken)
         {
-            _logger?.LogTrace("Starting connection loop");
+            _logger?.LogTrace("[{Id}] Starting connection loop", Id);
 
             bool _isRetry = false;
 
@@ -187,13 +196,15 @@
                 try
                 {
                     ipEndpoint = await _serverPool.SelectServer(_isRetry);
-                    _logger?.LogTrace("Connecting to {Server}", ipEndpoint);                    
+                    _logger?.LogTrace("[{Id}] Connecting to {Server}",Id, ipEndpoint);                    
 
                     await socket.ConnectAsync(ipEndpoint);
+
+                    _logger?.LogTrace("[{Id}] TCP socket connected to {Server}", Id, ipEndpoint);
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogError(ex, "Error connecting to {Server}", ipEndpoint);
+                    _logger?.LogError(ex, "[{Id}] Error connecting to {Server}",Id, ipEndpoint);
                     ConnectionException?.Invoke(this, ex);
 
                     await Task.Delay(TimeSpan.FromSeconds(1), disconnectToken);
@@ -205,19 +216,21 @@
 
                 _isRetry = false;
                 _receiverQueueSize = 0;
+                _connectionInfoTcs = new TaskCompletionSource<bool>();
 
                 var readPipe = new Pipe(new PipeOptions(pauseWriterThreshold: 0,useSynchronizationContext:false));
 
                 using var combinedCts = CancellationTokenSource.CreateLinkedTokenSource(disconnectToken, internalDisconnect.Token, _debugDisconnectSource.Token);
 
-                var readTask = Task.Run(() => ReadSocketAsync(socket, readPipe.Writer, combinedCts.Token), combinedCts.Token);
-                var processTask = Task.Run(() => ProcessMessagesAsync(readPipe.Reader, combinedCts.Token), combinedCts.Token);
-                var writeTask = Task.Run(() => WriteSocketAsync(socket, combinedCts.Token), combinedCts.Token);
-               
+                var readTask = Task.Run(() => ReadSocketAsync(socket, readPipe.Writer, combinedCts.Token), CancellationToken.None);
+                var processTask = Task.Run(() => ProcessMessagesAsync(readPipe.Reader, combinedCts.Token), CancellationToken.None);
+                var writeTask = Task.Run(() => WriteSocketAsync(socket, combinedCts.Token), CancellationToken.None);
+
                 try
                 {
+                   
                     Status = NatsStatus.Connected;
-                    _logger?.LogTrace("Socket Connected to {Server}", ipEndpoint);
+                    _logger?.LogTrace("[{Id}] Socket Connected to {Server}",Id, ipEndpoint);
 
                     await Task.WhenAny(new[] { readTask, processTask, writeTask });
                 }
@@ -226,30 +239,30 @@
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogError(ex, "Exception in the connection loop");
+                    _logger?.LogError(ex, "[{Id}] Exception in the connection loop",Id);
                     
                     if(readTask.Exception is not null)
-                        _logger?.LogError(readTask.Exception, "Exception in read task");
+                        _logger?.LogError(readTask.Exception, "[{Id}] Exception in read task",Id);
 
                     if(processTask.Exception is not null)
-                        _logger?.LogError(processTask.Exception, "Exception in process task");
+                        _logger?.LogError(processTask.Exception, "[{Id}] Exception in process task",Id);
 
                     if(writeTask.Exception is not null)
-                        _logger?.LogError(writeTask.Exception, "Exception in write task");
+                        _logger?.LogError(writeTask.Exception, "[{Id}] Exception in write task",Id);
 
                     ConnectionException?.Invoke(this, ex);
                 }
 
-                Status = NatsStatus.Connecting;
+                Status = disconnectToken.IsCancellationRequested?NatsStatus.Disconnected: NatsStatus.Connecting;
 
                 if(!internalDisconnect.IsCancellationRequested)
                     internalDisconnect.Cancel();
                 
-                _logger?.LogTrace("Waiting for read/write/process tasks to finish");
+                _logger?.LogTrace("[{Id}] Waiting for read/write/process tasks to finish",Id);
 
                 await WaitAll(readTask, processTask, writeTask);
             }
-            _logger?.LogTrace("Exited connection loop");
+            _logger?.LogTrace("[{Id}] Exited connection loop",Id);
         }
 
         private async Task WaitAll(params Task[] tasks)
@@ -265,7 +278,7 @@
                 }
                 catch (Exception ex)
                 {
-                    _logger?.LogError(ex, "Exception in a read/write/process task");
+                    _logger?.LogError(ex, "[{Id}] Exception in a read/write/process task",Id);
 
                     ConnectionException?.Invoke(this, ex);
                 }
@@ -274,7 +287,7 @@
 
         private async Task ReadSocketAsync(Socket socket, PipeWriter writer, CancellationToken disconnectToken)
         {
-            _logger?.LogTrace("Starting ReadSocketAsync loop");
+            _logger?.LogTrace("[{Id}] Starting ReadSocketAsync loop",Id);
 
             while (!disconnectToken.IsCancellationRequested)
             {
@@ -291,12 +304,12 @@
                 var flush = await writer.FlushAsync(disconnectToken).ConfigureAwait(false);
                 if (flush.IsCompleted || flush.IsCanceled) break;
             }
-            _logger?.LogTrace("Exited ReadSocketAsync loop");
+            _logger?.LogTrace("[{Id}] Exited ReadSocketAsync loop", Id);
         }
                 
         private async Task ProcessMessagesAsync(PipeReader reader, CancellationToken disconnectToken)
         {
-            _logger?.LogTrace("Starting ProcessMessagesAsync loop");
+            _logger?.LogTrace("[{Id}] Starting ProcessMessagesAsync loop",Id);
             var parser = new NatsMessageParser(_memoryPool,_inlineSubscriptions);
 
             INatsServerMessage[] parsedMessageBuffer = new INatsServerMessage[1024]; //arbitrary
@@ -331,11 +344,11 @@
                                 break;
 
                             case NatsInformation info:
-                                _logger?.LogTrace("Received connection information for {Server}, {ConnectionInformation}", info.Host, info);
+                                _logger?.LogTrace("[{Id}] Received connection information for {Server}, {ConnectionInformation}",Id, info.Host, info);
 
                                 if (Status!= NatsStatus.Connected)
                                 {
-                                    _logger?.LogTrace("Authenticated Connected to {Server}", info.Host);
+                                    _logger?.LogTrace("[{Id}] Authenticated Connected to {Server}", Id,info.Host);
                                 }
 
                                 NatsInformation = info;
@@ -351,21 +364,20 @@
                     }
                 } while (reader.TryRead(out read));
             }
-            _logger?.LogTrace("Exited ReadSocketAsync loop");
+            _logger?.LogTrace("[{Id}] Exited ReadSocketAsync loop", Id);
         }
 
         private async Task WriteSocketAsync(Socket socket, CancellationToken disconnectToken)
         {
-            _logger?.LogTrace("Starting WriteSocketAsync loop");
+            _logger?.LogTrace("[{Id}] Starting WriteSocketAsync loop", Id);
+
+            await SendConnect(socket, disconnectToken);
 
             ChannelReader<NatsPublishBuffer> reader = _senderChannel.Reader;
 
-            await SendConnect(socket, disconnectToken);
-           
-
             if (_reconnectResendBuffer.Length > 0)
             {
-                _logger?.LogTrace("Sending saved reconnect resend buffer");
+                _logger?.LogTrace("[{Id}] Sending saved reconnect resend buffer", Id);
                 try
                 {
                     await SocketSend(_reconnectResendBuffer, disconnectToken);
@@ -403,7 +415,7 @@
             
             }
 
-            _logger?.LogTrace("Exited WriteSocketAsync loop");
+            _logger?.LogTrace("[{Id}] Exited WriteSocketAsync loop", Id);
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
 
@@ -418,14 +430,14 @@
                     return sent;
                 }
                 catch (Exception ex) {
-                    _logger?.LogError(ex,"Error trying to write to socket");
+                    _logger?.LogError(ex, "[{Id}] Error trying to write to socket",Id);
 
                     //only save reconnect buffer if nothing transmitted
                     
                     //the risk is having partial messages in the buffer
                     if (sent == 0 && data.Length<= socket.SendBufferSize)
                     {
-                        _logger?.LogTrace("Saving reconnect resend buffer");
+                        _logger?.LogTrace("[{Id}] Saving reconnect resend buffer",Id);
 
                         var buffer = new byte[data.Length];
                         data.CopyTo(buffer);
@@ -441,6 +453,8 @@
 
         private async Task SendConnect(Socket socket, CancellationToken disconnectToken)
         {
+            _logger?.LogTrace("[{Id}] Starting SendConnect", Id);
+
             var connect = new NatsConnect(Options);
             var connectBuffer = NatsConnect.Serialize(connect);
 
@@ -448,15 +462,14 @@
             List<NatsSub> subs = new();
             foreach (var (id, subscription) in _inlineSubscriptions)
             {
-                _logger?.LogTrace("Resubscribing to {Subject} / {QueueGroup} / {SubscriptionId}", subscription.Subject, subscription.QueueGroup, subscription.SubscriptionId);
+                _logger?.LogTrace("[{Id}] Resubscribing to {Subject} / {QueueGroup} / {SubscriptionId}",Id, subscription.Subject, subscription.QueueGroup, subscription.SubscriptionId);
 
                 var sub = new NatsSub(subscription.Subject, subscription.QueueGroup, subscription.SubscriptionId);
                 subs.Add(sub);
                 totalSize += sub.Length;
             }
 
-            var localConnectionInfoTcs= new TaskCompletionSource<bool>();
-            _connectionInfoTcs = localConnectionInfoTcs;
+            var localConnectionInfoTcs = _connectionInfoTcs;
 
             var timeout = Options.ConnectTimeout;
             if(timeout<=TimeSpan.Zero)
@@ -487,9 +500,11 @@
 
             }
 
-            await _connectionInfoTcs.Task;
-            var connected = _connectionInfoTcs.Task.Result;
-            if (!connected)
+            _logger?.LogTrace("[{Id}] Connect packet sent", Id);
+
+            await localConnectionInfoTcs.Task;
+            var connected = localConnectionInfoTcs.Task.Result;
+            if (!connected && !disconnectToken.IsCancellationRequested)
             {
                 throw new TimeoutException("Connect Timeout");
             }
@@ -541,7 +556,7 @@
 
         public ValueTask PublishAsync(in NatsKey subject, in NatsPayload? payload = null, in NatsKey? replyTo = null, in NatsMsgHeaders? headers = null, CancellationToken cancellationToken = default)
         {
-            if(headers == null)
+            if(headers == null || headers.Value.IsEmpty)
             {
                 return WriteAsync(new NatsPub(subject, replyTo ?? NatsKey.Empty, payload ?? NatsPayload.Empty),cancellationToken);
             }

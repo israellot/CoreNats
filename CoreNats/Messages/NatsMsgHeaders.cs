@@ -17,22 +17,23 @@
 
         public readonly int SerializedLength;
 
+        public readonly bool IsEmpty;
+
         private readonly IEnumerable<KeyValuePair<string, string>> _headers;
 
         public NatsMsgHeaders(IEnumerable<KeyValuePair<string, string>> headers)
         {
             _headers = headers;
             SerializedLength = _protocolVersion.Length;
+            IsEmpty = !headers.Any();
+
             foreach (var (k, v) in headers)
             {
                 SerializedLength += k.Length + v.Length + _separator.Length + _end.Length;
-            }
-            SerializedLength+= _end.Length;
-
-            foreach(var (k,v) in headers)
-            {
                 CheckKeyValue(k, v);
             }
+            SerializedLength+= _end.Length;
+            
         }
 
         private void CheckKeyValue(string key, string value)

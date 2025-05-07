@@ -86,7 +86,7 @@
 
             Console.WriteLine();
 
-            //goto skip;
+            goto skip;
 
             //This first test sends a precomputed large buffer of 100mb 
             //It should get us a figure close to what NATS can ingest and drop
@@ -117,17 +117,17 @@
             }
             Console.WriteLine();
 
-            
+        skip:
             //Here we try to flood NATS with one processing subscription.
             //It should give us an idea of the read path overhead            
             Console.WriteLine("---Roundtrip raw pub 1 sub---");
             foreach (var messageSize in messageSizes)
             {
-                await RunBenchmark(4, 1, messageSize, 0, writerGenerate: false);
+                await RunBenchmark(Environment.ProcessorCount-1, 1, messageSize, 0, writerGenerate: false);
             }
             Console.WriteLine();
 
-        skip:
+        
             //Here we target a specific message/sec target rate at the writer task
             messageSizes = new[] { 8, 32, 128, 512, 1024 };
             Console.WriteLine("---Roundtrip 1 pub 1 sub---");
@@ -158,6 +158,7 @@
         
             messageSizes = new[] { 8, 16, 32, 64, 128, 256, 512, 1024 };
 
+        
             //Here publishing and generating messages from 100 different tasks
             Console.WriteLine("---Roundtrip 100 pub 1 sub---");
             foreach (var messageSize in messageSizes)
@@ -195,7 +196,6 @@
             Console.Write($"Target {(msgPerSecond>0?(msgPerSecond / 1000).ToString("0000")+ "k msg/s" : "flood\t")}\t{messageSize} B\t{publishers} pub\t{subscribers} sub : ");
 
             var options = new NatsDefaultOptions();
-            options.Servers = new string[] { "localhost:4222" };
             options.LoggerFactory = _loggerFactory;
 
             var writerConnection = new NatsConnection(options);           
@@ -377,20 +377,19 @@
 
                 var start = Stopwatch.GetTimestamp();
 
-                //var headers = new Dictionary<string, string>() { ["a"] = "b", ["abc"] = "def" };
-                var headers = new Dictionary<string, string>();
+                //var headers = new Dictionary<string, string>();
 
-                for(var i = 0; i < Random.Shared.Next(1, 50);i++)
-                {
-                    var hsize = Random.Shared.Next(1, 30);
-                    var sb = new StringBuilder();
-                    for(var j=0; j < hsize; j++)
-                    {
-                        sb.Append(Guid.NewGuid().ToString("N"));
-                    }
+                //for(var i = 0; i < Random.Shared.Next(1, 50);i++)
+                //{
+                //    var hsize = Random.Shared.Next(1, 30);
+                //    var sb = new StringBuilder();
+                //    for(var j=0; j < hsize; j++)
+                //    {
+                //        sb.Append(Guid.NewGuid().ToString("N"));
+                //    }
 
-                    headers[Guid.NewGuid().ToString("N")]=sb.ToString();
-                }
+                //    headers[Guid.NewGuid().ToString("N")]=sb.ToString();
+                //}
 
                 while (!cancellationToken.IsCancellationRequested)
                 {
@@ -398,7 +397,7 @@
                     for (var i = batch - 1; i >= 0; i--)
                     {
                         BitConverter.TryWriteBytes(message, Stopwatch.GetTimestamp());
-                        await connection.PublishAsync(subjectUtf8, message, headers: headers, cancellationToken: CancellationToken.None);
+                        await connection.PublishAsync(subjectUtf8, message, cancellationToken: CancellationToken.None);
                     }
 
                     messageCount += batch;
