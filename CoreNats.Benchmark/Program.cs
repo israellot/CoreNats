@@ -117,7 +117,7 @@
             }
             Console.WriteLine();
 
-        skip:
+        
             //Here we try to flood NATS with one processing subscription.
             //It should give us an idea of the read path overhead            
             Console.WriteLine("---Roundtrip raw pub 1 sub---");
@@ -155,10 +155,9 @@
             }
             Console.WriteLine();
 
-        
+
             messageSizes = new[] { 8, 16, 32, 64, 128, 256, 512, 1024 };
 
-        
             //Here publishing and generating messages from 100 different tasks
             Console.WriteLine("---Roundtrip 100 pub 1 sub---");
             foreach (var messageSize in messageSizes)
@@ -166,6 +165,26 @@
                 foreach (var rate in new[] { 1000, 10_000,50_000, 100_000, 500_000, 750_000, 1_000_000, 1_250_000, 1_500_000, 2_000_000 })
                 {
                     await RunBenchmark(100, 1, messageSize, rate);
+                }
+                Console.WriteLine();
+            }
+            Console.WriteLine();
+
+            Console.WriteLine();
+            Console.WriteLine("Press any key to exit...");
+            Console.ReadKey();
+
+        skip:
+
+            messageSizes = new[] { 8, 16, 32, 64, 128, 256, 512, 1024 };
+
+            //Here publishing and generating messages from 100 different tasks with 100 subscriptions
+            Console.WriteLine("---Roundtrip 100 pub 100 sub---");
+            foreach (var messageSize in messageSizes)
+            {
+                foreach (var rate in new[] { 1000, 10_000, 50_000, 100_000, 500_000, 750_000, 1_000_000, 1_250_000, 1_500_000, 2_000_000 })
+                {
+                    await RunBenchmark(100, 100, messageSize, rate);
                 }
                 Console.WriteLine();
             }
@@ -243,29 +262,20 @@
             {
                 foreach (var i in Enumerable.Range(0, publishers))
                 {
-                    writers.Add(FloodWriterTask(writerConnection, subject, writerCts.Token));
+                    writers.Add(FloodWriterTask(writerConnection, $"{subject}_{i}", writerCts.Token));
                 }
             }
             else
             {
                 foreach (var i in Enumerable.Range(0, publishers))
                 {
-                    writers.Add(WriterTask(writerConnection, subject, (double)msgPerSecond / publishers, writerCts.Token));
+                    writers.Add(WriterTask(writerConnection, $"{subject}_{i}", (double)msgPerSecond / publishers, writerCts.Token));
                 }
             }
 
-            if (subscribers == 1)
+            foreach (var i in Enumerable.Range(0, subscribers))
             {
-                readers.Add(ReaderText(readerConnection, subject, readerCts.Token));
-            }
-            else if (subscribers > 1)
-            {
-                readers.Add(ReaderText(readerConnection, subject, readerCts.Token));
-
-                foreach (var i in Enumerable.Range(0, subscribers - 1))
-                {
-                    readers.Add(ReaderText(readerConnection, $"{subject}_{i}", readerCts.Token));
-                }
+                readers.Add(ReaderText(readerConnection, $"{subject}_{i}", readerCts.Token));
             }
 
             double messagesPerSecond = 0;
@@ -303,9 +313,11 @@
                 bytesPerSecond= totalBytes / totalSecondsElapsed;
 
                 await Task.WhenAll(readers);
-                latencyMean = (double)readers.First().Result.mean;
-                latencyMax = readers.First().Result.max;
-                latencyMin = readers.First().Result.min;
+                var validReaders = readers.Where(r => r.Result.count > 0);
+
+                latencyMean = (double)validReaders.Select(r => r.Result.mean).Average();
+                latencyMax = validReaders.Select(r => r.Result.max).Max();
+                latencyMin = validReaders.Select(r => r.Result.min).Min();
 
                 var ms = Stopwatch.Frequency / 1000d;
                 latencyMean = latencyMean / ms;
@@ -345,7 +357,7 @@
 
             Console.Write($"{messagesPerSecond / 1000:f1}k msg/s\t{bytesPerSecond / 1000_0000:f2} MB/s");
             if (subscribers > 0)
-                Console.Write($" Lat: {latencyMean:f2}ms {latencyMax:f2}ms {latencyMin:f2}ms");
+                Console.Write($" Lat: {latencyMin:f2}ms {latencyMean:f2}ms {latencyMax:f2}ms");
 
             Console.Write("\r\n");
 
@@ -466,6 +478,8 @@
                 {
                     void Process(ref NatsInlineMsg message)
                     {
+                        var now = Stopwatch.GetTimestamp();
+
                         count++;
                         var payload = message.Payload;
 
@@ -482,8 +496,7 @@
                                 payload.Slice(0, 8).CopyTo(timestampSpan);
                                 timestamp = BitConverter.ToInt64(timestampSpan);
                             }
-
-                            var now = Stopwatch.GetTimestamp();
+                            
                             var rtt = (now - timestamp);
 
                             mean += (rtt - mean) / (double)count;

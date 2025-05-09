@@ -16,6 +16,7 @@
     using System.Net;
     using System.Buffers;
     using System.Diagnostics;
+    using System.Diagnostics.CodeAnalysis;
 
     public class NatsConnection : INatsConnection
     {
@@ -82,10 +83,12 @@
             public NatsKey Subject { get; }
             public NatsKey QueueGroup { get; }
             public long SubscriptionId { get; }
-            public NatsMessageProcess Process { get; }
-
-            public InlineSubscription(NatsKey subject, NatsKey? queueGroup, long subscriptionId, NatsMessageProcess process)
+            public NatsMessageInlineProcess Process { get; }
+            public InlineSubscription(NatsKey subject, NatsKey? queueGroup, long subscriptionId, NatsMessageInlineProcess process)
             {
+                if(process is null)
+                    throw new ArgumentException("Process delegate cannot be null", "process");
+
                 Subject = subject;
                 QueueGroup = queueGroup ?? NatsKey.Empty;
                 SubscriptionId = subscriptionId;
@@ -576,8 +579,10 @@
             Interlocked.Add(ref _transmitMessagesTotal, messageCount);
         }
                 
-        private async ValueTask InternalSubscribe(NatsKey subject, NatsMessageProcess process, NatsKey? queueGroup = null, CancellationToken cancellationToken = default)
+        private async ValueTask InternalSubscribe(NatsKey subject, NatsMessageInlineProcess process, NatsKey? queueGroup = null, CancellationToken cancellationToken = default)
         {
+            process ??= EmptyProcess;
+
             var subscription = new InlineSubscription(subject, queueGroup, Interlocked.Increment(ref _nextSubscriptionId), process);
 
             _inlineSubscriptions.TryAdd(subscription.SubscriptionId, subscription);
@@ -599,18 +604,42 @@
             }
         }
 
-        public async ValueTask SubscribeAsync(NatsKey subject, NatsMessageProcess process, NatsKey? queueGroup = null, CancellationToken cancellationToken = default)
+        public async ValueTask SubscribeAsync(NatsKey subject, NatsMessageInlineProcess process, NatsKey? queueGroup = null, CancellationToken cancellationToken = default)
         {
             await InternalSubscribe(subject, process, queueGroup, cancellationToken);
         }
 
-        public INatsUnsubscriber Subscribe(NatsKey subject, NatsMessageProcess process, NatsKey? queueGroup = null)
+        public INatsUnsubscriber Subscribe(NatsKey subject, NatsMessageInlineProcess process, NatsKey? queueGroup = null)
         {
             var unsubscriber = new NatsUnsubscriber();
 
             _= InternalSubscribe(subject, process, queueGroup, unsubscriber.Token);
 
             return unsubscriber;
+        }
+
+        public async ValueTask SubscribeAsync(NatsKey subject, NatsMessageProcess process, NatsKey? queueGroup = null, CancellationToken cancellationToken = default)
+        {
+            var inner = process == null ? EmptyProcess : new NatsMessageInlineProcess((ref msg) => process(msg.Persist()));
+
+            await InternalSubscribe(subject, inner, queueGroup, cancellationToken);
+        }
+
+        public INatsUnsubscriber Subscribe(NatsKey subject, NatsMessageProcess process, NatsKey? queueGroup = null)
+        {
+            var unsubscriber = new NatsUnsubscriber();
+
+            var inner = process==null? EmptyProcess: new NatsMessageInlineProcess((ref msg) => process(msg.Persist()));
+
+            _ = InternalSubscribe(subject, inner, queueGroup, unsubscriber.Token);
+
+            return unsubscriber;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void EmptyProcess(ref NatsInlineMsg msg)
+        {
+
         }
 
         internal void DebugSimulateDisconnection()

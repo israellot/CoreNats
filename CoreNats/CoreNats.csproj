@@ -1,8 +1,8 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>netstandard2.1</TargetFramework>
-    <LangVersion>9.0</LangVersion>
+    <TargetFrameworks>netstandard2.1;net8.0;</TargetFrameworks>
+    <LangVersion>preview</LangVersion>
     <Nullable>enable</Nullable>
     <AssemblyName>CoreNats</AssemblyName>
     <RootNamespace>CoreNats</RootNamespace>
@@ -16,9 +16,9 @@
     <PackageTags>async, nats.io</PackageTags>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
 
-    <AssemblyVersion>0.0.18</AssemblyVersion>
-    <FileVersion>0.0.18</FileVersion>
-    <Version>0.0.18</Version>
+    <AssemblyVersion>0.0.19</AssemblyVersion>
+    <FileVersion>0.0.19</FileVersion>
+    <Version>0.0.19</Version>
 
     <PackageIcon>logo.png</PackageIcon>
     <AllowUnsafeBlocks>True</AllowUnsafeBlocks>

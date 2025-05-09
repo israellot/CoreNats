@@ -36,11 +36,11 @@
                 line = line.Slice(0, line.Length - 1); // Slice out \r as well (not just \n)
                 
                 INatsServerMessage? message = null;
-                bool isInlined = false;
+                bool parsed = true;
                 switch (line[0])
                 {
-                    case (byte)'M': message = ParseMessage(line, ref reader, out isInlined); break;
-                    case (byte)'H': message = ParseMessageWithHeader(line, ref reader,out isInlined); break;
+                    case (byte)'M': parsed = ParseMessageInline(line, ref reader); break;
+                    case (byte)'H': parsed = ParseMessageWithHeaderInline(line, ref reader); break;
                     case (byte)'+': message = ParseOk(); break;                    
                     case (byte)'I': message = ParseInformation(line); break;
                     case (byte)'-': message = ParseError(line); break;
@@ -49,15 +49,14 @@
                         throw new ProtocolViolationException($"Unknown message {Encoding.UTF8.GetString(line)}");
                 }
 
-                if (!isInlined)
+                if (!parsed)
                 {
-                    if (message == null)
-                    {
-                        // Not enough information to parse the message
-                        reader.Rewind(reader.Consumed - previousPosition);
-                        break;
-                    }
-
+                    // Not enough information to parse the message
+                    reader.Rewind(reader.Consumed - previousPosition);
+                    break;
+                }
+                else if(message is not null)
+                {
                     outMessages[messageCount] = message;
                     messageCount++;
                 }
@@ -72,14 +71,13 @@
             return messageCount;
         }
 
-        public NatsMsg? ParseMessage(in ReadOnlySpan<byte> line, ref SequenceReader<byte> reader, out bool inlined)
+        public bool ParseMessageInline(in ReadOnlySpan<byte> line, ref SequenceReader<byte> reader)
         {
             //the idea here is to walk the *line* backwards in sequence just once
             //this should prevent memory fetching as it will usually fit into one cache line
             //it also helps that parsing int is done from right to left
             //we trust nats won't send malformed header lines
 
-            inlined = false;
 
             //parse total size
             var multiplier = 1;
@@ -96,7 +94,8 @@
                 currentByte = Unsafe.Add(ref lineRef, pointer);
             } while (currentByte != ' ');
 
-            if (reader.Remaining < payloadSize + 2) return null;
+            if (reader.Remaining < payloadSize + 2)
+                return false; //missing data
 
             var payloadSizeStart = pointer;
             pointer--;
@@ -137,8 +136,6 @@
 
             if (_inlineSubscriptions.TryGetValue(sid, out var inlineSubscription))
             {
-                inlined = true;
-
                 NatsInlineKey subject;
                 NatsInlineKey replyTo;
                 ReadOnlySequence<byte> payload = ReadOnlySequence<byte>.Empty;
@@ -162,57 +159,137 @@
 
                 var message = new NatsInlineMsg(ref subject, ref replyTo, sid, payload, NatsMsgHeadersRead.Empty);
 
-                inlineSubscription.Process?.Invoke(ref message);
+                try
+                {
+                    inlineSubscription.Process.Invoke(ref message);
+                }
+                catch(Exception ex)
+                {
+                    //swallow exception
+#if DEBUG
+                throw;
+#endif
+                }
+            }
 
-                reader.Advance(payloadSize + 2);
+            reader.Advance(payloadSize + 2);
 
-                return null;
+            return true;
+
+        }
+
+
+        public NatsMsg? ParseMessage(in ReadOnlySpan<byte> line, ref SequenceReader<byte> reader)
+        {
+            //the idea here is to walk the *line* backwards in sequence just once
+            //this should prevent memory fetching as it will usually fit into one cache line
+            //it also helps that parsing int is done from right to left
+            //we trust nats won't send malformed header lines
+
+
+            //parse total size
+            var multiplier = 1;
+            var payloadSize = 0;
+            var pointer = line.Length - 1;
+
+            ref byte lineRef = ref MemoryMarshal.GetReference(line);
+            byte currentByte = Unsafe.Add(ref MemoryMarshal.GetReference(line), pointer);
+            do
+            {
+                payloadSize += (currentByte - '0') * multiplier;
+                multiplier *= 10;
+                pointer--;
+                currentByte = Unsafe.Add(ref lineRef, pointer);
+            } while (currentByte != ' ');
+
+            if (reader.Remaining < payloadSize + 2) return null;
+
+            var payloadSizeStart = pointer;
+            pointer--;
+
+            Span<int> splits = stackalloc int[3];
+            var splitCount = 0;
+
+            while (pointer > 3)
+            {
+                var ch = line[pointer];
+                if (ch == ' ')
+                {
+                    splits[splitCount] = pointer;
+                    splitCount++;
+
+                    if (splitCount > 2)
+                        throw new ProtocolViolationException($"Invalid message header {Encoding.UTF8.GetString(line)}");
+                }
+
+                pointer--;
+            }
+            //done with first line
+
+
+
+            long sid = 0;
+            pointer = (splitCount == 1) ? payloadSizeStart - 1 : splits[0] - 1;
+            //sid            
+            multiplier = 1;
+            currentByte = Unsafe.Add(ref lineRef, pointer);
+            do
+            {
+                sid += (currentByte - '0') * multiplier;
+                multiplier *= 10;
+                pointer--;
+                currentByte = Unsafe.Add(ref lineRef, pointer);
+            } while (currentByte != ' ');
+
+           
+            var wholeMessageSize = payloadSize + line.Length;
+
+#if NET5_0_OR_GREATER
+            Memory<byte> copyBuffer = GC.AllocateUninitializedArray<byte>(wholeMessageSize);
+#else
+            Memory<byte> copyBuffer = new byte[wholeMessageSize];
+#endif
+
+
+            //copy message first line
+            var copyMemory = copyBuffer;
+            line.CopyTo(copyMemory.Span);
+
+            //copy payload + header
+            copyMemory = copyBuffer.Slice(line.Length);
+            reader.Sequence.Slice(reader.Position, payloadSize).CopyTo(copyMemory.Span);
+            reader.Advance(payloadSize + 2);
+
+            var payload = payloadSize > 0 ? copyMemory.Slice(0, payloadSize) : ReadOnlyMemory<byte>.Empty;
+
+            //get pointers to strings
+            NatsKey subject;
+            NatsKey replyTo = NatsKey.Empty;
+
+
+            copyMemory = copyBuffer;
+            if (splitCount == 1)
+            {
+                subject = new NatsKey(copyMemory.Slice(4, splits[0] - 4));
             }
             else
             {
-                var wholeMessageSize = payloadSize + line.Length;
-                var copyRented = _memoryPool.Rent(wholeMessageSize);
+                replyTo = new NatsKey(copyMemory.Slice(splits[0] + 1, payloadSizeStart - splits[0] - 1));
 
-                //copy message first line
-                var copyMemory = copyRented.Memory;
-                line.CopyTo(copyMemory.Span);
-
-                //copy payload + header
-                copyMemory = copyRented.Memory.Slice(line.Length);
-                reader.Sequence.Slice(reader.Position, payloadSize).CopyTo(copyMemory.Span);
-                reader.Advance(payloadSize + 2);
-
-                var payload = payloadSize > 0 ? copyMemory.Slice(0, payloadSize) : ReadOnlyMemory<byte>.Empty;
-
-                //get pointers to strings
-                NatsKey subject;
-                NatsKey replyTo = NatsKey.Empty;
-
-
-                copyMemory = copyRented.Memory;
-                if (splitCount == 1)
-                {
-                    subject = new NatsKey(copyMemory.Slice(4, splits[0] - 4));
-                }
-                else
-                {
-                    replyTo = new NatsKey(copyMemory.Slice(splits[0] + 1, payloadSizeStart - splits[0] - 1));
-
-                    subject = new NatsKey(copyMemory.Slice(4, splits[1] - 4));
-                }
-
-                return new NatsMsg(subject, sid, replyTo, payload, ReadOnlyMemory<byte>.Empty, copyRented);
-
+                subject = new NatsKey(copyMemory.Slice(4, splits[1] - 4));
             }
+
+            return new NatsMsg(subject, sid, replyTo, payload);
 
 
 
 
         }
 
-        public NatsMsg? ParseMessageWithHeader(in ReadOnlySpan<byte> line, ref SequenceReader<byte> reader, out bool inlined)
+
+        public bool ParseMessageWithHeaderInline(in ReadOnlySpan<byte> line, ref SequenceReader<byte> reader)
         {
-            inlined = false;
+           
             
             //parse total size
             var multiplier = 1;
@@ -284,11 +361,11 @@
 
             //done with first line
 
-            if (reader.Remaining < payloadSize + headerSize + 2) return null;
+            if (reader.Remaining < payloadSize + headerSize + 2) return false;
 
             if (_inlineSubscriptions.TryGetValue(sid, out var inlineSubscription))
             {
-                inlined = true;
+                
 
                 NatsInlineKey subject;
                 NatsInlineKey replyTo;
@@ -329,56 +406,142 @@
 
                 var message = new NatsInlineMsg(ref subject, ref replyTo, sid, payload, headers);
 
-                inlineSubscription.Process?.Invoke(ref message);
+                inlineSubscription.Process.Invoke(ref message);
 
                 headerBuffer.Return();
 
                 reader.Advance(headerSize+payloadSize + 2);
 
-                return null;
+                
 
             }
-            else
-            {
-                var wholeMessageSize = totalSize + line.Length;
-                var copyRented = _memoryPool.Rent(wholeMessageSize);
-
-                //copy message first line
-                var copyMemory = copyRented.Memory;
-                line.CopyTo(copyMemory.Span);
-
-                //copy payload + header
-                copyMemory = copyRented.Memory.Slice(line.Length);
-                reader.Sequence.Slice(reader.Position, totalSize).CopyTo(copyMemory.Span);
-                reader.Advance(totalSize + 2);
-
-                var headers = copyMemory.Slice(0, headerSize);
-                var payload = payloadSize > 0 ? copyMemory.Slice(headerSize, payloadSize) : ReadOnlyMemory<byte>.Empty;
-
-                //get pointers to strings
-                NatsKey subject;
-                NatsKey replyTo = NatsKey.Empty;
+            //else  //just advance and drop message
 
 
-                copyMemory = copyRented.Memory;
-                if (splitCount == 1)
-                {
-                    subject = new NatsKey(copyMemory.Slice(5, splits[0] - 5));
-                }
-                else
-                {
-                    replyTo = new NatsKey(copyMemory.Slice(splits[0] + 1, headerSizeEnd - splits[0]));
-                    subject = new NatsKey(copyMemory.Slice(5, splits[1] - 5));
-                }
+            reader.Advance(headerSize + payloadSize + 2);
 
-                return new NatsMsg(subject, sid, replyTo, payload, headers, copyRented);
-            }
-
-           
-
+            return true;
 
 
         }
+
+
+        public NatsMsg? ParseMessageWithHeader(in ReadOnlySpan<byte> line, ref SequenceReader<byte> reader)
+        {
+            //parse total size
+            var multiplier = 1;
+            var totalSize = 0;
+            var pointer = line.Length - 1;
+
+            ref byte lineRef = ref MemoryMarshal.GetReference(line);
+            byte currentByte = Unsafe.Add(ref lineRef, pointer);
+            do
+            {
+                totalSize += (currentByte - '0') * multiplier;
+                multiplier *= 10;
+                pointer--;
+                currentByte = Unsafe.Add(ref lineRef, pointer);
+            } while (currentByte != ' ');
+
+
+
+            pointer--;
+
+            //parse header size
+            multiplier = 1;
+            var headerSize = 0;
+            var headerSizeStart = pointer;
+            currentByte = Unsafe.Add(ref lineRef, pointer);
+            do
+            {
+                headerSize += (currentByte - '0') * multiplier;
+                multiplier *= 10;
+                pointer--;
+                currentByte = Unsafe.Add(ref lineRef, pointer);
+            } while (currentByte != ' ');
+
+
+            pointer--;
+            var headerSizeEnd = pointer;
+
+            Span<int> splits = stackalloc int[3];
+            var splitCount = 0;
+
+            while (pointer > 4)
+            {
+                var ch = line[pointer];
+                if (ch == ' ')
+                {
+                    splits[splitCount] = pointer;
+                    splitCount++;
+
+                    if (splitCount > 2)
+                        throw new ProtocolViolationException($"Invalid message header {Encoding.UTF8.GetString(line)}");
+                }
+
+                pointer--;
+            }
+            var payloadSize = totalSize - headerSize;
+
+            //sid
+            long sid = 0;
+            pointer = (splitCount == 1) ? headerSizeEnd : splits[0] - 1;
+            multiplier = 1;
+            currentByte = Unsafe.Add(ref lineRef, pointer);
+            do
+            {
+                sid += (currentByte - '0') * multiplier;
+                multiplier *= 10;
+                pointer--;
+                currentByte = Unsafe.Add(ref lineRef, pointer);
+            } while (currentByte != ' ');
+
+            //done with first line
+
+            if (reader.Remaining < payloadSize + headerSize + 2) 
+                return null; //missing data
+
+
+            var wholeMessageSize = totalSize + line.Length;
+
+#if NET5_0_OR_GREATER
+            Memory<byte> copyBuffer = GC.AllocateUninitializedArray<byte>(wholeMessageSize);
+#else
+            Memory<byte> copyBuffer = new byte[wholeMessageSize];
+#endif
+
+            //copy message first line
+            var copyMemory = copyBuffer;
+            line.CopyTo(copyMemory.Span);
+
+            //copy payload + header
+            copyMemory = copyBuffer.Slice(line.Length);
+            reader.Sequence.Slice(reader.Position, totalSize).CopyTo(copyMemory.Span);
+            reader.Advance(totalSize + 2);
+
+            var headers = copyMemory.Slice(0, headerSize);
+            var payload = payloadSize > 0 ? copyMemory.Slice(headerSize, payloadSize) : ReadOnlyMemory<byte>.Empty;
+
+            //get pointers to strings
+            NatsKey subject;
+            NatsKey replyTo = NatsKey.Empty;
+
+            copyMemory = copyBuffer;
+            if (splitCount == 1)
+            {
+                subject = new NatsKey(copyMemory.Slice(5, splits[0] - 5));
+            }
+            else
+            {
+                replyTo = new NatsKey(copyMemory.Slice(splits[0] + 1, headerSizeEnd - splits[0]));
+                subject = new NatsKey(copyMemory.Slice(5, splits[1] - 5));
+            }
+
+            return new NatsMsg(subject, sid, replyTo, payload, new NatsMsgHeadersRead(headers));
+
+
+        }
+
 
         public NatsOk ParseOk()
         {

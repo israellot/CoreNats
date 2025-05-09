@@ -12,19 +12,16 @@
         public readonly ReadOnlyMemory<byte> Memory;
         private readonly string _string;
 
-        public NatsKey(ReadOnlyMemory<byte> value) : this(value, false)
-        { }
-
-        internal NatsKey(ReadOnlyMemory<byte> value, bool convert = false)
+        internal NatsKey(ReadOnlyMemory<byte> value)
         {
             Memory = value;
-            _string = convert ? Encoding.UTF8.GetString(value.Span) : string.Empty;
+            _string = string.Empty;
         }
 
         public NatsKey(string? value)
         {
             _string = value ?? string.Empty;
-            Memory = (_string == string.Empty) ? ReadOnlyMemory<byte>.Empty : Encoding.UTF8.GetBytes(value);
+            Memory = (_string == string.Empty) ? ReadOnlyMemory<byte>.Empty : Encoding.UTF8.GetBytes(_string);
         }
 
         public string AsString()
@@ -49,7 +46,7 @@
             return Equals(in other);
         }
 
-        public bool Equals(string other)
+        public bool Equals(string? other)
         {
             return this.AsString() == other;
         }

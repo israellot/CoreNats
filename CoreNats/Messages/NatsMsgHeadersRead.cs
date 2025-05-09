@@ -14,8 +14,12 @@
 
         private readonly IEnumerable<KeyValuePair<ReadOnlyMemory<byte>, ReadOnlyMemory<byte>>> _headers;
 
+        internal readonly ReadOnlyMemory<byte> Data;
+
         public NatsMsgHeadersRead(ReadOnlyMemory<byte> data)
         {
+            Data = data;
+
             if (data.IsEmpty)
                 _headers = Enumerable.Empty<KeyValuePair<ReadOnlyMemory<byte>, ReadOnlyMemory<byte>>>();
             else
@@ -139,7 +143,10 @@
 
         }
         
-        
+        internal NatsMsgHeadersRead Copy()
+        {
+            return new NatsMsgHeadersRead(Data.ToArray());
+        }
     }
 
 
