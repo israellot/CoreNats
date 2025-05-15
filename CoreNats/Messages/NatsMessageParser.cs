@@ -406,13 +406,19 @@
 
                 var message = new NatsInlineMsg(ref subject, ref replyTo, sid, payload, headers);
 
-                inlineSubscription.Process.Invoke(ref message);
+                try
+                {
+                    inlineSubscription.Process.Invoke(ref message);
+                }
+                catch (Exception ex)
+                {
+                    //swallow exception
+#if DEBUG
+                throw;
+#endif
+                }
 
                 headerBuffer.Return();
-
-                reader.Advance(headerSize+payloadSize + 2);
-
-                
 
             }
             //else  //just advance and drop message
