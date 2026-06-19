@@ -485,17 +485,24 @@
             if (subs.Count > 0)
             {
                 var ms = _memoryPool.Rent(totalSize);
-                var memory = ms.Memory;
-                connectBuffer.CopyTo(ms.Memory);
-
-                memory=memory.Slice(connectBuffer.Length);
-                foreach (var sub in subs)
+                try
                 {
-                    sub.Serialize(memory.Span);
-                    memory = memory.Slice(sub.Length);
-                }
+                    var memory = ms.Memory;
+                    connectBuffer.CopyTo(ms.Memory);
 
-                await socket.SendAsync(ms.Memory, SocketFlags.None, disconnectToken);
+                    memory=memory.Slice(connectBuffer.Length);
+                    foreach (var sub in subs)
+                    {
+                        sub.Serialize(memory.Span);
+                        memory = memory.Slice(sub.Length);
+                    }
+
+                    await socket.SendAsync(ms.Memory, SocketFlags.None, disconnectToken);
+                }
+                finally
+                {
+                    ms.Return();
+                }
             }
             else
             {
