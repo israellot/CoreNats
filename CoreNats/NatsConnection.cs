@@ -155,7 +155,7 @@
             _connectionInfoTcs = new TaskCompletionSource<bool>();
         }
 
-        public ValueTask ConnectAsync()
+        public async ValueTask ConnectAsync()
         {
             if (_disposeTokenSource.IsCancellationRequested)
             {
@@ -163,17 +163,24 @@
                 throw new ObjectDisposedException("Connection already disposed");
             }
 
-            if (_disconnectSource != null)
+            await _connectLock.WaitAsync();
+            try
             {
-                _logger?.LogError("[{Id}] Already connected",Id);
-                throw new InvalidAsynchronousStateException("Already connected");
+                if (_disconnectSource != null)
+                {
+                    _logger?.LogError("[{Id}] Already connected",Id);
+                    throw new InvalidAsynchronousStateException("Already connected");
+                }
+
+                _disconnectSource = new CancellationTokenSource();
+
+                _senderQueueSize = 0;
+                _readWriteAsyncTask = Task.Run(() => ReadWriteAsync(_disconnectSource.Token), _disconnectSource.Token);
             }
-
-            _disconnectSource = new CancellationTokenSource();
-
-            _senderQueueSize = 0;
-            _readWriteAsyncTask = Task.Run(() => ReadWriteAsync(_disconnectSource.Token), _disconnectSource.Token);
-            return new ValueTask();
+            finally
+            {
+                _connectLock.Release();
+            }
         }
 
         private async Task ReadWriteAsync(CancellationToken disconnectToken)
@@ -526,21 +533,35 @@
         public async ValueTask DisconnectAsync()
         {
             if (_disposeTokenSource.IsCancellationRequested) throw new ObjectDisposedException("Connection already disposed");
+
+            CancellationTokenSource? cts;
+            Task? rwTask;
+
+            await _connectLock.WaitAsync();
             try
             {
-                _disconnectSource?.Cancel();
-                if (_readWriteAsyncTask != null)
-                    await _readWriteAsyncTask;
+                cts = _disconnectSource;
+                rwTask = _readWriteAsyncTask;
+                _disconnectSource = null;
+                _readWriteAsyncTask = null;
+            }
+            finally
+            {
+                _connectLock.Release();
+            }
+
+            try
+            {
+                cts?.Cancel();
+                if (rwTask != null)
+                    await rwTask;
             }
             catch (OperationCanceledException)
             {
             }
             finally
             {
-                _disconnectSource?.Dispose();
-                _readWriteAsyncTask = null;
-                _disconnectSource = null;
-
+                cts?.Dispose();
                 Status = NatsStatus.Disconnected;
             }
         }
@@ -592,7 +613,7 @@
             {
                 var tcs = new TaskCompletionSource<bool>();
 
-                cancellationToken.Register(() => tcs.SetResult(true));
+                using var reg = cancellationToken.Register(() => tcs.TrySetResult(true));
 
                 await tcs.Task;
                 
