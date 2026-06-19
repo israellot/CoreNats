@@ -46,10 +46,18 @@
             return Equals(in other);
         }
 
+        public override bool Equals(object? obj)
+        {
+            return obj is NatsKey other && Equals(in other);
+        }
+
         public bool Equals(string? other)
         {
             return this.AsString() == other;
         }
+
+        public static bool operator ==(NatsKey left, NatsKey right) => left.Equals(in right);
+        public static bool operator !=(NatsKey left, NatsKey right) => !left.Equals(in right);
 
         internal NatsKey Copy()
         {
