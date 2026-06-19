@@ -46,11 +46,6 @@
         /// </summary>
         public void Return()
         {
-            // Guard both _owner and _buffer: _buffer should always be non-null when
-            // _owner is non-null (they are set together in the pool constructor), but
-            // an explicit null check prevents passing null to ArrayPool.Return() if
-            // the struct is ever in an inconsistent state (e.g. constructed via
-            // reflection or deserialization).
             if (_owner is not null && _buffer is not null)
             {
                 _owner.Return(_buffer);

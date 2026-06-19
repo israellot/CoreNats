@@ -112,7 +112,7 @@
                 throw new InvalidOperationException("dns resolve returned 0 entries");
             }
 
-            _logger?.LogTrace("Dns hostname {Host} resolve to {Ips}",string.Join<IPAddress>(',',resolved));
+            _logger?.LogTrace("Dns hostname {Host} resolve to {Ips}", dnsEndpoint.Host, string.Join(",", resolved.Select(ip => ip.ToString())));
 
             if (resolved.Length > 1)
             {                
@@ -142,33 +142,37 @@
 
         private DnsEndPoint ParseAndNormalizeServerEntry(string server)
         {
-            var schemaIndex = server.IndexOf("://");
-            if (schemaIndex > 0)
-            {
-                server = server.Substring(schemaIndex + 3);
-            }
-
-            if (!server.Contains(':'))
-            {
-                server = $"{server}:4222"; //default nats port
-            }
-
-            var split = server.Split(':');
-
-            if (split.Length != 2)
+            if (string.IsNullOrWhiteSpace(server))
                 throw new FormatException($"invalid server string {server}");
 
-            var stringHost = split[0];
-            var stringPort = split[1];
+            var originalServer = server;
+            if (originalServer.EndsWith(":", StringComparison.Ordinal))
+                throw new FormatException($"invalid server string {originalServer}");
 
-            if(!int.TryParse(stringPort, out int port))
-                throw new FormatException($"invalid server string {server}");
+            if (!server.Contains("://"))
+            {
+                server = $"nats://{server}";
+            }
 
-            var checkHostNameResult = Uri.CheckHostName(stringHost);
+            if (!Uri.TryCreate(server, UriKind.Absolute, out var uri))
+            {
+                if (!Uri.TryCreate($"{server}:4222", UriKind.Absolute, out uri))
+                    throw new FormatException($"invalid server string {originalServer}");
+            }
+
+            if (!string.IsNullOrEmpty(uri.UserInfo) || string.IsNullOrWhiteSpace(uri.Host))
+                throw new FormatException($"invalid server string {originalServer}");
+
+            var host = uri.Host.Trim('[', ']');
+            var port = uri.IsDefaultPort ? 4222 : uri.Port;
+            if (port <= 0)
+                throw new FormatException($"invalid server string {originalServer}");
+
+            var checkHostNameResult = Uri.CheckHostName(host);
             if(checkHostNameResult==UriHostNameType.Unknown)
-                throw new FormatException($"invalid server string {server}");
+                throw new FormatException($"invalid server string {originalServer}");
 
-            return new DnsEndPoint(stringHost,port);
+            return new DnsEndPoint(host, port);
             
         }
 

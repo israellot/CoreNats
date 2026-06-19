@@ -15,12 +15,15 @@
 
         private readonly ConcurrentDictionary<long, NatsConnection.InlineSubscription> _inlineSubscriptions;
 
+        private readonly Action<Exception>? _inlineExceptionHandler;
+
         public NatsMessageParser() : this(null, null) { }
 
-        internal NatsMessageParser(NatsMemoryPool? memoryPool=null, ConcurrentDictionary<long, NatsConnection.InlineSubscription>? inlineSubscriptions=null)
+        internal NatsMessageParser(NatsMemoryPool? memoryPool=null, ConcurrentDictionary<long, NatsConnection.InlineSubscription>? inlineSubscriptions=null, Action<Exception>? inlineExceptionHandler = null)
         {
             _memoryPool = memoryPool ?? new NatsMemoryPool();
             _inlineSubscriptions = inlineSubscriptions ?? new ConcurrentDictionary<long, NatsConnection.InlineSubscription>();
+            _inlineExceptionHandler = inlineExceptionHandler;
         }
 
 
@@ -173,7 +176,7 @@
                 }
                 catch(Exception ex)
                 {
-                    //swallow exception
+                    _inlineExceptionHandler?.Invoke(ex);
 #if DEBUG
                 throw;
 #endif
@@ -418,9 +421,9 @@
                 {
                     inlineSubscription.Process.Invoke(ref message);
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    //swallow exception
+                    _inlineExceptionHandler?.Invoke(ex);
 #if DEBUG
 					throw;
 #endif

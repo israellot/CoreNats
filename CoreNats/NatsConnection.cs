@@ -45,6 +45,7 @@
         private readonly NatsPublishChannel _senderChannel;
         private readonly NatsMemoryPool _memoryPool;
         private readonly ConcurrentDictionary<long, InlineSubscription> _inlineSubscriptions = new ConcurrentDictionary<long, InlineSubscription>();
+        private readonly ConcurrentDictionary<NatsUnsubscriber, byte> _activeUnsubscribers = new ConcurrentDictionary<NatsUnsubscriber, byte>();
 
         private class Subscription
         {
@@ -151,7 +152,7 @@
 
             _serverPool = options.ServerPoolFactory(options);
 
-            _logger?.LogError("[{Id}] Connection created", Id);
+            _logger?.LogTrace("[{Id}] Connection created", Id);
 
             _connectionInfoTcs = new TaskCompletionSource<bool>();
         }
@@ -321,7 +322,7 @@
         private async Task ProcessMessagesAsync(PipeReader reader, CancellationToken disconnectToken)
         {
             _logger?.LogTrace("[{Id}] Starting ProcessMessagesAsync loop",Id);
-            var parser = new NatsMessageParser(_memoryPool,_inlineSubscriptions);
+            var parser = new NatsMessageParser(_memoryPool,_inlineSubscriptions, HandleInlineException);
 
             INatsServerMessage[] parsedMessageBuffer = new INatsServerMessage[1024]; //arbitrary
 
@@ -498,12 +499,7 @@
             if(timeout<=TimeSpan.Zero)
                 timeout= TimeSpan.FromSeconds(5);
 
-            var timeoutCts = new CancellationTokenSource();
-            // Cancel the timeout timer once the TCS is resolved (success or prior timeout),
-            // so each attempt doesn't leave a live Task.Delay running after connect completes.
-            _ = localConnectionInfoTcs.Task.ContinueWith(
-                _ => timeoutCts.Cancel(),
-                TaskContinuationOptions.ExecuteSynchronously);
+            using var timeoutCts = new CancellationTokenSource();
             // OnlyOnRanToCompletion: when the delay is cancelled (attempt already resolved),
             // skip the continuation so TrySetResult(false) is never called on a stale TCS
             // and no unobserved TaskCanceledException surfaces.
@@ -545,11 +541,18 @@
 
             _logger?.LogTrace("[{Id}] Connect packet sent", Id);
 
-            await localConnectionInfoTcs.Task;
-            var connected = localConnectionInfoTcs.Task.Result;
-            if (!connected && !disconnectToken.IsCancellationRequested)
+            try
             {
-                throw new TimeoutException("Connect Timeout");
+                await localConnectionInfoTcs.Task;
+                var connected = localConnectionInfoTcs.Task.Result;
+                if (!connected && !disconnectToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException("Connect Timeout");
+                }
+            }
+            finally
+            {
+                timeoutCts.Cancel();
             }
 
         }
@@ -603,6 +606,12 @@
         {
             if (_disposeTokenSource.IsCancellationRequested) return;
 
+            foreach (var unsubscriber in _activeUnsubscribers.Keys)
+            {
+                unsubscriber.Unsubscribe();
+            }
+
+            _activeUnsubscribers.Clear();
             _inlineSubscriptions.Clear();
 
             await DisconnectAsync();
@@ -665,7 +674,8 @@
 
         public INatsUnsubscriber Subscribe(NatsKey subject, NatsMessageInlineProcess process, NatsKey? queueGroup = null)
         {
-            var unsubscriber = new NatsUnsubscriber();
+            var unsubscriber = new NatsUnsubscriber(RemoveActiveUnsubscriber);
+            _activeUnsubscribers.TryAdd(unsubscriber, 0);
 
             ObserveSubscribeTask(InternalSubscribe(subject, process, queueGroup, unsubscriber.Token));
 
@@ -674,16 +684,17 @@
 
         public async ValueTask SubscribeAsync(NatsKey subject, NatsMessageProcess process, NatsKey? queueGroup = null, CancellationToken cancellationToken = default)
         {
-            var inner = process == null ? EmptyProcess : new NatsMessageInlineProcess((ref msg) => process(msg.Persist()));
+            var inner = process == null ? EmptyProcess : new NatsMessageInlineProcess((ref NatsInlineMsg msg) => process(msg.Persist()));
 
             await InternalSubscribe(subject, inner, queueGroup, cancellationToken);
         }
 
         public INatsUnsubscriber Subscribe(NatsKey subject, NatsMessageProcess process, NatsKey? queueGroup = null)
         {
-            var unsubscriber = new NatsUnsubscriber();
+            var unsubscriber = new NatsUnsubscriber(RemoveActiveUnsubscriber);
+            _activeUnsubscribers.TryAdd(unsubscriber, 0);
 
-            var inner = process==null? EmptyProcess: new NatsMessageInlineProcess((ref msg) => process(msg.Persist()));
+            var inner = process==null? EmptyProcess: new NatsMessageInlineProcess((ref NatsInlineMsg msg) => process(msg.Persist()));
 
             ObserveSubscribeTask(InternalSubscribe(subject, inner, queueGroup, unsubscriber.Token));
 
@@ -712,6 +723,17 @@
                 _logger?.LogError(inner, "[{Id}] Exception from Subscribe() background task", Id);
                 ConnectionException?.Invoke(this, inner);
             }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
+        }
+
+        private void RemoveActiveUnsubscriber(NatsUnsubscriber unsubscriber)
+        {
+            _activeUnsubscribers.TryRemove(unsubscriber, out _);
+        }
+
+        private void HandleInlineException(Exception exception)
+        {
+            _logger?.LogError(exception, "[{Id}] Exception from inline subscription handler", Id);
+            ConnectionException?.Invoke(this, exception);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

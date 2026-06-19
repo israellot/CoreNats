@@ -116,6 +116,34 @@
         }
 
         [Fact]
+        public void AcceptIpv6LoopbackWithPort()
+        {
+            var options = new NatsDefaultOptions()
+            {
+                Servers = new[] { "[::1]:4223" }
+            };
+
+            var pool = new NatsServerPool(options);
+
+            Assert.Equal("::1", pool.Servers[0].Host);
+            Assert.Equal(4223, pool.Servers[0].Port);
+        }
+
+        [Fact]
+        public void AcceptIpv6LoopbackWithSchemeAndDefaultPort()
+        {
+            var options = new NatsDefaultOptions()
+            {
+                Servers = new[] { "nats://[::1]" }
+            };
+
+            var pool = new NatsServerPool(options);
+
+            Assert.Equal("::1", pool.Servers[0].Host);
+            Assert.Equal(4222, pool.Servers[0].Port);
+        }
+
+        [Fact]
         public void ThrowsOnInvalidHostName()
         {
             var options = new NatsDefaultOptions()

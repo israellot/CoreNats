@@ -15,10 +15,12 @@ namespace CoreNats
         public CancellationToken Token => _cts.Token;
 
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
+        private readonly Action<NatsUnsubscriber>? _onDispose;
         private int _disposed;
 
-        public NatsUnsubscriber()
+        public NatsUnsubscriber(Action<NatsUnsubscriber>? onDispose = null)
         {
+            _onDispose = onDispose;
         }
 
         public void Unsubscribe()
@@ -44,6 +46,7 @@ namespace CoreNats
             if (Interlocked.Exchange(ref _disposed, 1) == 0)
             {
                 _cts.Dispose();
+                _onDispose?.Invoke(this);
             }
         }
     }
