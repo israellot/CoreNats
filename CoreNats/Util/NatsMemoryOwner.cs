@@ -41,9 +41,31 @@
 
     internal class ProxyOwner<T> : IMemoryOwner<T>
     {
-        public Memory<T> Memory => _memory;
+        /// <summary>
+        /// Returns the memory slice owned by this instance.
+        /// Throws <see cref="ObjectDisposedException"/> if the owner has already been disposed,
+        /// preventing silent data loss from the null-array coercion that makes
+        /// <c>_memory = null</c> compile as <c>Memory&lt;T&gt;.Empty</c>.
+        /// </summary>
+        public Memory<T> Memory
+        {
+            get
+            {
+                if (_disposed)
+                    throw new ObjectDisposedException(nameof(ProxyOwner<T>));
+                return _memory;
+            }
+        }
 
-        public ReadOnlyMemory<T> ReadOnlyMemory => _memory;
+        public ReadOnlyMemory<T> ReadOnlyMemory
+        {
+            get
+            {
+                if (_disposed)
+                    throw new ObjectDisposedException(nameof(ProxyOwner<T>));
+                return _memory;
+            }
+        }
 
         public IMemoryOwner<T>? Parent => _owner;
 
@@ -77,7 +99,7 @@
 
                 _owner?.Dispose();
                 _owner = null;
-                _memory = null;
+                _memory = default;  // clear reference for GC; access is now guarded by _disposed check above
             }
 
         }
