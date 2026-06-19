@@ -2,14 +2,13 @@
 {
     using System;
     using System.Buffers.Text;
-    using System.Text;
 
 
     public readonly struct NatsPub: INatsClientMessage
     {
-        private static readonly ReadOnlyMemory<byte> _command = new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes("PUB "));
-        private static readonly ReadOnlyMemory<byte> _del = new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes(" "));
-        private static readonly ReadOnlyMemory<byte> _end = new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes("\r\n"));
+        private const int CommandLength = 4;
+        private const int DelimiterLength = 1;
+        private const int EndLength = 2;
 
         private readonly int _length;
         public int Length => _length;
@@ -24,7 +23,7 @@
             _replyTo = replyTo;
             _payload = payload;
 
-            var hint = _command.Length; // PUB
+            var hint = CommandLength; // PUB
             hint += subject.Memory.Length + 1; // Subject + space
             hint += replyTo.IsEmpty ? 0 : replyTo.Memory.Length + 1; // ReplyTo
             if (payload.Memory.Length < 10) hint += 1;
@@ -36,40 +35,42 @@
             else if (payload.Memory.Length < 10_000_000) hint += 7;
             else throw new ArgumentOutOfRangeException(nameof(payload));
 
-            hint += _end.Length; // Ending
+            hint += EndLength; // Ending
             hint += payload.Memory.Length;
-            hint += _end.Length; // Ending Payload
+            hint += EndLength; // Ending Payload
 
             _length = hint;
         }
 
         public void Serialize(Span<byte> buffer)
         {
-            _command.Span.CopyTo(buffer);
-            var consumed = _command.Length;
+            buffer[0] = (byte)'P';
+            buffer[1] = (byte)'U';
+            buffer[2] = (byte)'B';
+            buffer[3] = (byte)' ';
+            var consumed = CommandLength;
             _subject.Memory.Span.CopyTo(buffer.Slice(consumed));
             consumed += _subject.Memory.Length;
-            _del.Span.CopyTo(buffer.Slice(consumed));
-            consumed++;
+            buffer[consumed++] = (byte)' ';
             if (!_replyTo.IsEmpty)
             {
                 _replyTo.Memory.Span.CopyTo(buffer.Slice(consumed));
                 consumed += _replyTo.Memory.Length;
-                _del.Span.CopyTo(buffer.Slice(consumed));
-                consumed++;
+                buffer[consumed++] = (byte)' ';
             }
 
             Utf8Formatter.TryFormat(_payload.Memory.Length, buffer.Slice(consumed), out var written);
             consumed += written;
-            _end.Span.CopyTo(buffer.Slice(consumed));
-            consumed += _end.Length;
+            buffer[consumed++] = (byte)'\r';
+            buffer[consumed++] = (byte)'\n';
             if (!_payload.IsEmpty)
             {
                 _payload.Memory.Span.CopyTo(buffer.Slice(consumed));
                 consumed += _payload.Memory.Length;
             }
 
-            _end.Span.CopyTo(buffer.Slice(consumed));
+            buffer[consumed++] = (byte)'\r';
+            buffer[consumed] = (byte)'\n';
 
             _payload.Owner?.Dispose();
         }

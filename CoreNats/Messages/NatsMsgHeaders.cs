@@ -19,20 +19,47 @@
 
         public readonly bool IsEmpty;
 
-        private readonly IEnumerable<KeyValuePair<string, string>> _headers;
+        private readonly ReadOnlyMemory<byte> _serialized;
 
         public NatsMsgHeaders(IEnumerable<KeyValuePair<string, string>> headers)
         {
-            _headers = headers;
-            SerializedLength = _protocolVersion.Length;
-            IsEmpty = !headers.Any();
+            if (headers == null)
+                throw new ArgumentNullException(nameof(headers));
 
-            foreach (var (k, v) in headers)
+            var headerArray = headers as KeyValuePair<string, string>[] ?? headers.ToArray();
+            SerializedLength = _protocolVersion.Length;
+            IsEmpty = headerArray.Length == 0;
+
+            foreach (var (k, v) in headerArray)
             {
                 SerializedLength += k.Length + v.Length + _separator.Length + _end.Length;
                 CheckKeyValue(k, v);
             }
             SerializedLength+= _end.Length;
+
+            var serialized = new byte[SerializedLength];
+            var buffer = serialized.AsSpan();
+
+            _protocolVersion.Span.CopyTo(buffer);
+            buffer = buffer.Slice(_protocolVersion.Length);
+
+            foreach (var (k, v) in headerArray)
+            {
+                Encoding.UTF8.GetBytes(k, buffer);
+                buffer = buffer.Slice(k.Length);
+
+                _separator.Span.CopyTo(buffer);
+                buffer = buffer.Slice(_separator.Length);
+
+                Encoding.UTF8.GetBytes(v, buffer);
+                buffer = buffer.Slice(v.Length);
+
+                _end.Span.CopyTo(buffer);
+                buffer = buffer.Slice(_end.Length);
+            }
+
+            _end.Span.CopyTo(buffer);
+            _serialized = serialized;
             
         }
 
@@ -65,26 +92,7 @@
 
         internal void SerializeTo(Span<byte> buffer)
         {
-
-            _protocolVersion.Span.CopyTo(buffer);
-            buffer = buffer.Slice(_protocolVersion.Length);
-
-            foreach (var (k, v) in _headers!)
-            {
-                Encoding.UTF8.GetBytes(k, buffer);
-                buffer = buffer.Slice(k.Length);
-
-                _separator.Span.CopyTo(buffer);
-                buffer = buffer.Slice(_separator.Length);
-
-                Encoding.UTF8.GetBytes(v, buffer);
-                buffer = buffer.Slice(v.Length);
-
-                _end.Span.CopyTo(buffer);
-                buffer = buffer.Slice(_end.Length);
-            }
-
-            _end.Span.CopyTo(buffer);            
+            _serialized.Span.CopyTo(buffer);
         }
 
         //implicit conversions        
