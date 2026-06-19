@@ -613,7 +613,7 @@
         {
             var unsubscriber = new NatsUnsubscriber();
 
-            _= InternalSubscribe(subject, process, queueGroup, unsubscriber.Token);
+            ObserveSubscribeTask(InternalSubscribe(subject, process, queueGroup, unsubscriber.Token));
 
             return unsubscriber;
         }
@@ -631,9 +631,37 @@
 
             var inner = process==null? EmptyProcess: new NatsMessageInlineProcess((ref msg) => process(msg.Persist()));
 
-            _ = InternalSubscribe(subject, inner, queueGroup, unsubscriber.Token);
+            ObserveSubscribeTask(InternalSubscribe(subject, inner, queueGroup, unsubscriber.Token));
 
             return unsubscriber;
+        }
+
+        /// <summary>
+        /// Observes the fire-and-forget task returned by the synchronous Subscribe() overloads.
+        /// InternalSubscribe's first await (channel write) can fault before the subscription
+        /// lifetime TCS is reached -- e.g. ChannelClosedException or OperationCanceledException on
+        /// a disposed connection. Without observation the exception would be silently swallowed.
+        /// This routes any such fault to ConnectionException (event) and the logger, consistent
+        /// with how WaitAll() handles read/write/process task faults.
+        /// Cancellation (normal unsubscribe path via NatsUnsubscriber.Token) is not an error and
+        /// is intentionally suppressed.
+        /// </summary>
+        internal void ObserveSubscribeTask(ValueTask task)
+        {
+            if (task.IsCompletedSuccessfully)
+                return;
+
+            task.AsTask().ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception is { } ex)
+                {
+                    // unwrap AggregateException so the log and event carry the root cause
+                    var inner = ex.InnerException ?? (Exception)ex;
+                    _logger?.LogError(inner, "[{Id}] Unobserved exception from Subscribe() background task", Id);
+                    ConnectionException?.Invoke(this, inner);
+                }
+                // IsCanceled = normal unsubscribe via NatsUnsubscriber.Token -- not an error
+            }, TaskContinuationOptions.ExecuteSynchronously);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
