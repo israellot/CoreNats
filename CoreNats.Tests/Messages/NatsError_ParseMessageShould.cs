@@ -9,8 +9,8 @@
 
     public class NatsError_ParseMessageShould
     {
-        private ReadOnlyMemory<byte> _withErrorMessage = new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes("-ERR 'Stale Connection'\r\n"));
-        private ReadOnlyMemory<byte> _withoutErrorMessage = new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes("-ERR\r\n"));
+        private ReadOnlyMemory<byte> _withErrorMessage = new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes("-ERR 'Stale Connection'"));
+        private ReadOnlyMemory<byte> _withoutErrorMessage = new ReadOnlyMemory<byte>(Encoding.UTF8.GetBytes("-ERR"));
 
         [Fact]
         public void ReturnNatsError()
