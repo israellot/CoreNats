@@ -71,6 +71,14 @@
             return Equals(in other);
         }
 
+        public override bool Equals(object? obj)
+        {
+            return obj is NatsPayload other && Equals(in other);
+        }
+
+        public static bool operator ==(NatsPayload left, NatsPayload right) => left.Equals(in right);
+        public static bool operator !=(NatsPayload left, NatsPayload right) => !left.Equals(in right);
+
         public override int GetHashCode()
         {
             //TODO Should cache?
