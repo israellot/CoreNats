@@ -574,8 +574,9 @@
 
         public NatsError ParseError(in ReadOnlySpan<byte> line)
         {
-            if (line.Length == 6) return new NatsError();
-            var error = line.Slice(6, line.Length - 9); // Remove "-ERR ''"
+            // Minimum valid error with message: "-ERR 'X'" = 8 bytes (after \r already stripped by caller)
+            if (line.Length < 8) return new NatsError();
+            var error = line.Slice(6, line.Length - 7); // Remove leading "-ERR '" (6) and trailing "'" (1)
             return new NatsError { Error = Encoding.UTF8.GetString(error) };
         }
 
