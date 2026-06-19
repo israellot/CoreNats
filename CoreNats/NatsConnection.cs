@@ -334,7 +334,11 @@
                 {                    
                     var parsedCount = parser.ParseMessages(read.Buffer, parsedMessageBuffer, out var consumed,out var inlined);
 
-                    reader.AdvanceTo(read.Buffer.GetPosition(consumed));
+                    var consumedPosition = read.Buffer.GetPosition(consumed);
+                    if (consumed == 0)
+                        reader.AdvanceTo(consumedPosition, read.Buffer.End);
+                    else
+                        reader.AdvanceTo(consumedPosition);
 
                     Interlocked.Add(ref _receivedMessagesTotal, inlined);
 
@@ -391,7 +395,7 @@
                 _logger?.LogTrace("[{Id}] Sending saved reconnect resend buffer", Id);
                 try
                 {
-                    await SocketSend(_reconnectResendBuffer, disconnectToken);
+                    await SocketSendAll(socket, _reconnectResendBuffer, disconnectToken);
                 }
                 finally
                 {
@@ -417,7 +421,7 @@
 
                             Interlocked.Add(ref _senderQueueSize, -memory.Length);
 
-                            await SocketSend(memory, disconnectToken);
+                            await SocketSendAll(socket, memory, disconnectToken, saveReconnectBuffer: true);
 
                             Interlocked.Add(ref _transmitMessagesTotal, chunk.Messages);
                             Interlocked.Add(ref _transmitBytesTotal, memory.Length);
@@ -432,38 +436,41 @@
             }
 
             _logger?.LogTrace("[{Id}] Exited WriteSocketAsync loop", Id);
+        }
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-
-            async ValueTask<int> SocketSend(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
+        private async ValueTask SocketSendAll(Socket socket, ReadOnlyMemory<byte> data, CancellationToken cancellationToken, bool saveReconnectBuffer = false)
+        {
+            var remaining = data;
+            var sent = 0;
+            try
             {
-                int sent = 0;
-                try
+                while (!remaining.IsEmpty)
                 {
-                    sent = await socket.SendAsync(data, SocketFlags.None, cancellationToken).ConfigureAwait(false);
+                    var bytesSent = await socket.SendAsync(remaining, SocketFlags.None, cancellationToken).ConfigureAwait(false);
+                    if (bytesSent == 0)
+                        throw new SocketException((int)SocketError.ConnectionReset);
 
-                    //it seems there's no chance sent can be < data length for send success
-                    return sent;
+                    sent += bytesSent;
+                    remaining = remaining.Slice(bytesSent);
                 }
-                catch (Exception ex) {
-                    _logger?.LogError(ex, "[{Id}] Error trying to write to socket",Id);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "[{Id}] Error trying to write to socket",Id);
 
-                    //only save reconnect buffer if nothing transmitted
-                    
-                    //the risk is having partial messages in the buffer
-                    if (sent == 0 && data.Length<= socket.SendBufferSize)
-                    {
-                        _logger?.LogTrace("[{Id}] Saving reconnect resend buffer",Id);
+                //only save reconnect buffer if nothing transmitted
 
-                        var buffer = new byte[data.Length];
-                        data.CopyTo(buffer);
-                        _reconnectResendBuffer = buffer;
+                //the risk is having partial messages in the buffer
+                if (saveReconnectBuffer && sent == 0 && data.Length <= socket.SendBufferSize)
+                {
+                    _logger?.LogTrace("[{Id}] Saving reconnect resend buffer",Id);
 
-                        throw new SocketException();
-                    }
-                    else
-                        return sent;
+                    var buffer = new byte[data.Length];
+                    data.CopyTo(buffer);
+                    _reconnectResendBuffer = buffer;
                 }
+
+                throw;
             }
         }
 
@@ -523,7 +530,7 @@
                         memory = memory.Slice(sub.Length);
                     }
 
-                    await socket.SendAsync(ms.Memory, SocketFlags.None, disconnectToken);
+                    await SocketSendAll(socket, ms.Memory, disconnectToken);
                 }
                 finally
                 {
@@ -532,7 +539,7 @@
             }
             else
             {
-                await socket.SendAsync(connectBuffer, SocketFlags.None, disconnectToken);
+                await SocketSendAll(socket, connectBuffer, disconnectToken);
 
             }
 
