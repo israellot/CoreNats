@@ -35,6 +35,7 @@
         private long _transmitMessagesTotal;
         private long _receivedMessagesTotal;
 
+        private readonly SemaphoreSlim _connectLock = new SemaphoreSlim(1, 1);
         private Task? _readWriteAsyncTask;
         private CancellationTokenSource? _disconnectSource;
         private CancellationTokenSource? _debugDisconnectSource;
@@ -483,8 +484,21 @@
             if(timeout<=TimeSpan.Zero)
                 timeout= TimeSpan.FromSeconds(5);
 
-            _ =Task.Delay(timeout)
-                .ContinueWith(t=> localConnectionInfoTcs.TrySetResult(false), TaskContinuationOptions.ExecuteSynchronously);
+            var timeoutCts = new CancellationTokenSource();
+            // Cancel the timeout timer once the TCS is resolved (success or prior timeout),
+            // so each attempt doesn't leave a live Task.Delay running after connect completes.
+            _ = localConnectionInfoTcs.Task.ContinueWith(
+                _ => timeoutCts.Cancel(),
+                TaskContinuationOptions.ExecuteSynchronously);
+            // OnlyOnRanToCompletion: when the delay is cancelled (attempt already resolved),
+            // skip the continuation so TrySetResult(false) is never called on a stale TCS
+            // and no unobserved TaskCanceledException surfaces.
+            _ = Task.Delay(timeout, timeoutCts.Token)
+                .ContinueWith(
+                    t => localConnectionInfoTcs.TrySetResult(false),
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
 
             //resubscribe
             if (subs.Count > 0)
