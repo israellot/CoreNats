@@ -35,6 +35,7 @@
         private long _transmitMessagesTotal;
         private long _receivedMessagesTotal;
 
+        private readonly SemaphoreSlim _connectLock = new SemaphoreSlim(1, 1);
         private Task? _readWriteAsyncTask;
         private CancellationTokenSource? _disconnectSource;
         private CancellationTokenSource? _debugDisconnectSource;
@@ -99,7 +100,7 @@
 
         }
 
-        private NatsStatus _status;
+        private volatile NatsStatus _status;
         private readonly CancellationTokenSource _disposeTokenSource;
 
         private INatsServerPool _serverPool;
@@ -155,7 +156,7 @@
             _connectionInfoTcs = new TaskCompletionSource<bool>();
         }
 
-        public ValueTask ConnectAsync()
+        public async ValueTask ConnectAsync()
         {
             if (_disposeTokenSource.IsCancellationRequested)
             {
@@ -163,17 +164,24 @@
                 throw new ObjectDisposedException("Connection already disposed");
             }
 
-            if (_disconnectSource != null)
+            await _connectLock.WaitAsync();
+            try
             {
-                _logger?.LogError("[{Id}] Already connected",Id);
-                throw new InvalidAsynchronousStateException("Already connected");
+                if (_disconnectSource != null)
+                {
+                    _logger?.LogError("[{Id}] Already connected",Id);
+                    throw new InvalidAsynchronousStateException("Already connected");
+                }
+
+                _disconnectSource = new CancellationTokenSource();
+
+                _senderQueueSize = 0;
+                _readWriteAsyncTask = Task.Run(() => ReadWriteAsync(_disconnectSource.Token), _disconnectSource.Token);
             }
-
-            _disconnectSource = new CancellationTokenSource();
-
-            _senderQueueSize = 0;
-            _readWriteAsyncTask = Task.Run(() => ReadWriteAsync(_disconnectSource.Token), _disconnectSource.Token);
-            return new ValueTask();
+            finally
+            {
+                _connectLock.Release();
+            }
         }
 
         private async Task ReadWriteAsync(CancellationToken disconnectToken)
@@ -399,21 +407,26 @@
                 
                 await foreach(var chunk in reader.ReadAllAsync(disconnectToken).ConfigureAwait(false))
                 {
-                    await chunk.Commit();
-
-                    if (chunk.Messages > 0)
+                    try
                     {
-                        var memory = chunk.GetMemory();
+                        await chunk.Commit();
 
-                        Interlocked.Add(ref _senderQueueSize, -memory.Length);
+                        if (chunk.Messages > 0)
+                        {
+                            var memory = chunk.GetMemory();
 
-                        await SocketSend(memory, disconnectToken);
+                            Interlocked.Add(ref _senderQueueSize, -memory.Length);
 
-                        Interlocked.Add(ref _transmitMessagesTotal, chunk.Messages);
-                        Interlocked.Add(ref _transmitBytesTotal, memory.Length);
+                            await SocketSend(memory, disconnectToken);
+
+                            Interlocked.Add(ref _transmitMessagesTotal, chunk.Messages);
+                            Interlocked.Add(ref _transmitBytesTotal, memory.Length);
+                        }
                     }
-
-                    _senderChannel.Return(chunk);
+                    finally
+                    {
+                        _senderChannel.Return(chunk);
+                    }
                 }
             
             }
@@ -478,24 +491,44 @@
             if(timeout<=TimeSpan.Zero)
                 timeout= TimeSpan.FromSeconds(5);
 
-            _ =Task.Delay(timeout)
-                .ContinueWith(t=> localConnectionInfoTcs.TrySetResult(false), TaskContinuationOptions.ExecuteSynchronously);
+            var timeoutCts = new CancellationTokenSource();
+            // Cancel the timeout timer once the TCS is resolved (success or prior timeout),
+            // so each attempt doesn't leave a live Task.Delay running after connect completes.
+            _ = localConnectionInfoTcs.Task.ContinueWith(
+                _ => timeoutCts.Cancel(),
+                TaskContinuationOptions.ExecuteSynchronously);
+            // OnlyOnRanToCompletion: when the delay is cancelled (attempt already resolved),
+            // skip the continuation so TrySetResult(false) is never called on a stale TCS
+            // and no unobserved TaskCanceledException surfaces.
+            _ = Task.Delay(timeout, timeoutCts.Token)
+                .ContinueWith(
+                    t => localConnectionInfoTcs.TrySetResult(false),
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
 
             //resubscribe
             if (subs.Count > 0)
             {
                 var ms = _memoryPool.Rent(totalSize);
-                var memory = ms.Memory;
-                connectBuffer.CopyTo(ms.Memory);
-
-                memory=memory.Slice(connectBuffer.Length);
-                foreach (var sub in subs)
+                try
                 {
-                    sub.Serialize(memory.Span);
-                    memory = memory.Slice(sub.Length);
-                }
+                    var memory = ms.Memory;
+                    connectBuffer.CopyTo(ms.Memory);
 
-                await socket.SendAsync(ms.Memory, SocketFlags.None, disconnectToken);
+                    memory=memory.Slice(connectBuffer.Length);
+                    foreach (var sub in subs)
+                    {
+                        sub.Serialize(memory.Span);
+                        memory = memory.Slice(sub.Length);
+                    }
+
+                    await socket.SendAsync(ms.Memory, SocketFlags.None, disconnectToken);
+                }
+                finally
+                {
+                    ms.Return();
+                }
             }
             else
             {
@@ -526,21 +559,35 @@
         public async ValueTask DisconnectAsync()
         {
             if (_disposeTokenSource.IsCancellationRequested) throw new ObjectDisposedException("Connection already disposed");
+
+            CancellationTokenSource? cts;
+            Task? rwTask;
+
+            await _connectLock.WaitAsync();
             try
             {
-                _disconnectSource?.Cancel();
-                if (_readWriteAsyncTask != null)
-                    await _readWriteAsyncTask;
+                cts = _disconnectSource;
+                rwTask = _readWriteAsyncTask;
+                _disconnectSource = null;
+                _readWriteAsyncTask = null;
+            }
+            finally
+            {
+                _connectLock.Release();
+            }
+
+            try
+            {
+                cts?.Cancel();
+                if (rwTask != null)
+                    await rwTask;
             }
             catch (OperationCanceledException)
             {
             }
             finally
             {
-                _disconnectSource?.Dispose();
-                _readWriteAsyncTask = null;
-                _disconnectSource = null;
-
+                cts?.Dispose();
                 Status = NatsStatus.Disconnected;
             }
         }
@@ -592,7 +639,7 @@
             {
                 var tcs = new TaskCompletionSource<bool>();
 
-                cancellationToken.Register(() => tcs.SetResult(true));
+                using var reg = cancellationToken.Register(() => tcs.TrySetResult(true));
 
                 await tcs.Task;
                 
@@ -613,7 +660,7 @@
         {
             var unsubscriber = new NatsUnsubscriber();
 
-            _= InternalSubscribe(subject, process, queueGroup, unsubscriber.Token);
+            ObserveSubscribeTask(InternalSubscribe(subject, process, queueGroup, unsubscriber.Token));
 
             return unsubscriber;
         }
@@ -631,9 +678,33 @@
 
             var inner = process==null? EmptyProcess: new NatsMessageInlineProcess((ref msg) => process(msg.Persist()));
 
-            _ = InternalSubscribe(subject, inner, queueGroup, unsubscriber.Token);
+            ObserveSubscribeTask(InternalSubscribe(subject, inner, queueGroup, unsubscriber.Token));
 
             return unsubscriber;
+        }
+
+        /// <summary>
+        /// Observes the fire-and-forget task returned by the synchronous Subscribe() overloads.
+        /// InternalSubscribe's first await (channel write) can fault before the subscription
+        /// lifetime TCS is reached -- e.g. ChannelClosedException or OperationCanceledException on
+        /// a disposed connection. Without observation the exception would be silently swallowed.
+        /// This routes any such fault to ConnectionException (event) and the logger, consistent
+        /// with how WaitAll() handles read/write/process task faults.
+        /// Cancellation (normal unsubscribe path via NatsUnsubscriber.Token) is not an error and
+        /// is intentionally suppressed.
+        /// </summary>
+        internal void ObserveSubscribeTask(ValueTask task)
+        {
+            if (task.IsCompletedSuccessfully)
+                return;
+
+            task.AsTask().ContinueWith(t =>
+            {
+                var ex = t.Exception!;
+                var inner = ex.Flatten().InnerException ?? (Exception)ex;
+                _logger?.LogError(inner, "[{Id}] Exception from Subscribe() background task", Id);
+                ConnectionException?.Invoke(this, inner);
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

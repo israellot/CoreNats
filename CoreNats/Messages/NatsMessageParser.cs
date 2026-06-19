@@ -33,18 +33,26 @@
             {
                 var previousPosition = reader.Consumed;
                 if (!reader.TryReadTo(out ReadOnlySpan<byte> line, (byte) '\n')) break;
-                line = line.Slice(0, line.Length - 1); // Slice out \r as well (not just \n)
-                
+                // Strip trailing \r only when present (guards bare \n with nothing before it)
+                if (line.Length > 0 && line[line.Length - 1] == (byte)'\r')
+                    line = line.Slice(0, line.Length - 1);
+                // Skip empty lines (bare \r\n or \n)
+                if (line.Length == 0) continue;
+
                 INatsServerMessage? message = null;
                 bool parsed = true;
                 switch (line[0])
                 {
                     case (byte)'M': parsed = ParseMessageInline(line, ref reader); break;
                     case (byte)'H': parsed = ParseMessageWithHeaderInline(line, ref reader); break;
-                    case (byte)'+': message = ParseOk(); break;                    
+                    case (byte)'+': message = ParseOk(); break;
                     case (byte)'I': message = ParseInformation(line); break;
                     case (byte)'-': message = ParseError(line); break;
-                    case (byte)'P': message = line[1] == (byte)'I' ? ParsePing():ParsePong(); break;
+                    case (byte)'P':
+                        if (line.Length < 2)
+                            throw new ProtocolViolationException($"Unknown message {Encoding.UTF8.GetString(line)}");
+                        message = line[1] == (byte)'I' ? ParsePing() : ParsePong();
+                        break;
                     default:
                         throw new ProtocolViolationException($"Unknown message {Encoding.UTF8.GetString(line)}");
                 }
@@ -410,20 +418,24 @@
                 {
                     inlineSubscription.Process.Invoke(ref message);
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
                     //swallow exception
 #if DEBUG
-                throw;
+					throw;
 #endif
                 }
-
-                headerBuffer.Return();
-
+                finally
+                {
+                    headerBuffer.Return();
+                }
             }
-            //else  //just advance and drop message
+            //else: no matching subscription, just advance and drop the message
 
-
+            // Advance once, unconditionally, for both the matched and unmatched cases
+            // (mirrors ParseMessageInline). Previously this also advanced inside the
+            // `if` above, double-consuming the message body whenever a subscription
+            // matched and corrupting the parse position for every subsequent message.
             reader.Advance(headerSize + payloadSize + 2);
 
             return true;
@@ -562,8 +574,9 @@
 
         public NatsError ParseError(in ReadOnlySpan<byte> line)
         {
-            if (line.Length == 6) return new NatsError();
-            var error = line.Slice(6, line.Length - 9); // Remove "-ERR ''"
+            // Minimum valid error with message: "-ERR 'X'" = 8 bytes (after \r already stripped by caller)
+            if (line.Length < 8) return new NatsError();
+            var error = line.Slice(6, line.Length - 7); // Remove leading "-ERR '" (6) and trailing "'" (1)
             return new NatsError { Error = Encoding.UTF8.GetString(error) };
         }
 

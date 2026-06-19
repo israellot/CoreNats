@@ -109,7 +109,7 @@
             var buffer = new byte[pub.Length];
             pub.Serialize(buffer);
 
-            payload.Owner?.Dispose();
+            // payload.Owner already disposed by instance Serialize above
 
             return buffer;
         }

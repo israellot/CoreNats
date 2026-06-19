@@ -45,7 +45,7 @@
             
             while (!current.TryWrite(msg, out messageIndex))
             {
-                await _channel.Writer.WaitToWriteAsync().ConfigureAwait(false);
+                await _channel.Writer.WaitToWriteAsync(cancellationToken).ConfigureAwait(false);
                                 
                 lock (_lock)
                 {
