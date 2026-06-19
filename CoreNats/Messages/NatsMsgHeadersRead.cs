@@ -132,6 +132,11 @@
                 var key = data.Slice(0, keyEnd);
                 data = data.Slice(keyEnd + 1);
 
+                // Skip a single optional leading space after the colon (NATS/HTTP convention: "Key: Value").
+                // This makes both "Key:Value" and "Key: Value" yield the same stored value.
+                if (data.Length > 0 && data.Span[0] == (byte)' ')
+                    data = data.Slice(1);
+
                 var valueEnd = data.Span.IndexOf((byte)'\r');
                 var value = data.Slice(0, valueEnd);
                 data = data.Slice(valueEnd + 2); //skip /r/n
