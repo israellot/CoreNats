@@ -40,25 +40,25 @@
         public bool TryWrite<T>(T msg, out int messageIndex) where T : INatsClientMessage
         {
             messageIndex = -1;
-            int start;
             lock (_lock)
             {
-                if ((_length - _position) < msg.Length || _commit) return false;
+                var messageLength = msg.Length;
+                if ((_length - _position) < messageLength || _commit) return false;
 
                 Interlocked.Increment(ref _writers);
-
-                //get a slot
-                start = _position;
-                _position += msg.Length;
-                messageIndex = _messages;
-                _messages++;
+                try
+                {
+                    msg.Serialize(_buffer.AsSpan(_position, messageLength));
+                    messageIndex = _messages;
+                    _position += messageLength;
+                    _messages++;
+                    return true;
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref _writers);
+                }
             }
-
-            var writeSlot = _buffer.AsSpan().Slice(start, msg.Length);
-
-            msg.Serialize(writeSlot);
-            Interlocked.Decrement(ref _writers);
-            return true;
         }
 
 
