@@ -74,12 +74,12 @@
                 OnCommit?.Invoke();
 
             var count = 2048;
-            while (_writers > 0 && count >= 0)
+            while (Volatile.Read(ref _writers) > 0 && count >= 0)
             {
                 count--;
             }
 
-            while (_writers > 0)
+            while (Volatile.Read(ref _writers) > 0)
             {
                 await Task.Yield();
             }
