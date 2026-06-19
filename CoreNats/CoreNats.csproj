@@ -24,6 +24,12 @@
     <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
 	<PackageReadmeFile>README.md</PackageReadmeFile>
 	<PackageReleaseNotes>
+    ### v0.0.20
+    * Fixed bare-LF protocol line parsing so message content is preserved when no carriage return is present.
+    * Fixed handling for empty protocol lines and malformed short protocol lines.
+    * Fixed inline header message parsing to avoid advancing the reader twice for matched subscriptions.
+    * Fixed pooled header buffer cleanup so buffers are returned even when inline header message handlers throw.
+
 		### v0.0.1
 		* Initial commit
 
