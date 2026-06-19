@@ -406,9 +406,21 @@
 
                 var message = new NatsInlineMsg(ref subject, ref replyTo, sid, payload, headers);
 
-                inlineSubscription.Process.Invoke(ref message);
-
-                headerBuffer.Return();
+                try
+                {
+                    inlineSubscription.Process.Invoke(ref message);
+                }
+                catch (Exception)
+                {
+                    //swallow exception
+#if DEBUG
+                    throw;
+#endif
+                }
+                finally
+                {
+                    headerBuffer.Return();
+                }
             }
             //else: no matching subscription, just advance and drop the message
 
