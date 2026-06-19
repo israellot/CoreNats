@@ -653,15 +653,11 @@
 
             task.AsTask().ContinueWith(t =>
             {
-                if (t.IsFaulted && t.Exception is { } ex)
-                {
-                    // unwrap AggregateException so the log and event carry the root cause
-                    var inner = ex.InnerException ?? (Exception)ex;
-                    _logger?.LogError(inner, "[{Id}] Unobserved exception from Subscribe() background task", Id);
-                    ConnectionException?.Invoke(this, inner);
-                }
-                // IsCanceled = normal unsubscribe via NatsUnsubscriber.Token -- not an error
-            }, TaskContinuationOptions.ExecuteSynchronously);
+                var ex = t.Exception!;
+                var inner = ex.Flatten().InnerException ?? (Exception)ex;
+                _logger?.LogError(inner, "[{Id}] Exception from Subscribe() background task", Id);
+                ConnectionException?.Invoke(this, inner);
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
