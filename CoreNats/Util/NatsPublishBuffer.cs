@@ -56,8 +56,14 @@
 
             var writeSlot = _buffer.AsSpan().Slice(start, msg.Length);
 
-            msg.Serialize(writeSlot);
-            Interlocked.Decrement(ref _writers);
+            try
+            {
+                msg.Serialize(writeSlot);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _writers);
+            }
             return true;
         }
 
