@@ -64,9 +64,10 @@
 
         public async ValueTask Commit()
         {
-            bool committed = _commit == false;
+            bool committed;
             lock (_lock)
             {
+                committed = _commit == false;
                 _commit = true;
             }
 
