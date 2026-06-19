@@ -29,9 +29,29 @@
             Memory = buffer.AsMemory();
         }
        
+        /// <summary>
+        /// Returns the rented buffer back to the <see cref="ArrayPool{T}"/>.
+        /// This method is a safe no-op when called on a default/empty instance
+        /// (i.e. when no pool buffer was rented).
+        ///
+        /// <para>
+        /// <strong>Value-type copy warning:</strong> Because <see cref="NatsMemoryOwner"/>
+        /// is a <c>readonly struct</c>, every assignment creates an independent copy that
+        /// holds the same <c>_owner</c> and <c>_buffer</c> references.  Calling
+        /// <c>Return()</c> on two copies of the same instance will return the same
+        /// array to the pool twice, which is undefined behaviour and can cause silent
+        /// memory corruption.  Callers must ensure that only one copy of a pool-backed
+        /// owner is ever returned.
+        /// </para>
+        /// </summary>
         public void Return()
-        {            
-            if (_owner is not null)
+        {
+            // Guard both _owner and _buffer: _buffer should always be non-null when
+            // _owner is non-null (they are set together in the pool constructor), but
+            // an explicit null check prevents passing null to ArrayPool.Return() if
+            // the struct is ever in an inconsistent state (e.g. constructed via
+            // reflection or deserialization).
+            if (_owner is not null && _buffer is not null)
             {
                 _owner.Return(_buffer);
             }
