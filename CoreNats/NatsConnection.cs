@@ -99,7 +99,7 @@
 
         }
 
-        private NatsStatus _status;
+        private volatile NatsStatus _status;
         private readonly CancellationTokenSource _disposeTokenSource;
 
         private INatsServerPool _serverPool;
