@@ -592,7 +592,7 @@
             {
                 var tcs = new TaskCompletionSource<bool>();
 
-                cancellationToken.Register(() => tcs.SetResult(true));
+                using var reg = cancellationToken.Register(() => tcs.TrySetResult(true));
 
                 await tcs.Task;
                 
