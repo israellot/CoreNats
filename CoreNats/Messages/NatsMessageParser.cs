@@ -409,15 +409,13 @@
                 inlineSubscription.Process.Invoke(ref message);
 
                 headerBuffer.Return();
-
-                reader.Advance(headerSize+payloadSize + 2);
-
-                
-
             }
-            //else  //just advance and drop message
+            //else: no matching subscription, just advance and drop the message
 
-
+            // Advance once, unconditionally, for both the matched and unmatched cases
+            // (mirrors ParseMessageInline). Previously this also advanced inside the
+            // `if` above, double-consuming the message body whenever a subscription
+            // matched and corrupting the parse position for every subsequent message.
             reader.Advance(headerSize + payloadSize + 2);
 
             return true;
