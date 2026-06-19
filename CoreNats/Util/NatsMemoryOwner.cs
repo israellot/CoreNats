@@ -108,7 +108,7 @@
         }
 
         object _disposeLock = new object();
-        bool _disposed;
+        volatile bool _disposed;
         public void Dispose()
         {
             if (_disposed) return;
