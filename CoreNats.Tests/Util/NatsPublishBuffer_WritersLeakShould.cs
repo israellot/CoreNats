@@ -7,6 +7,23 @@ namespace CoreNats.Tests.Util
 
     public class NatsPublishBuffer_WritersLeakShould
     {
+        private sealed class WritingMessage : INatsClientMessage
+        {
+            private readonly byte[] _payload;
+
+            public WritingMessage(params byte[] payload)
+            {
+                _payload = payload;
+            }
+
+            public int Length => _payload.Length;
+
+            public void Serialize(Span<byte> buffer)
+            {
+                _payload.CopyTo(buffer);
+            }
+        }
+
         /// <summary>
         /// A fake message whose Serialize always throws, used to exercise the
         /// _writers leak path in NatsPublishBuffer.TryWrite.
@@ -68,6 +85,37 @@ namespace CoreNats.Tests.Util
                 "Commit() did not complete within 2 seconds when Length changed after reservation");
 
             await commitTask;
+        }
+
+        [Fact]
+        public void FailedFirstWriteDoesNotAdvanceBufferState()
+        {
+            var buffer = new NatsPublishBuffer(new byte[1024]);
+
+            Assert.Throws<InvalidOperationException>(() =>
+                buffer.TryWrite(new ThrowingMessage(), out _));
+
+            Assert.True(buffer.TryWrite(new WritingMessage(1, 2, 3), out var messageIndex));
+            Assert.Equal(0, messageIndex);
+            Assert.Equal(1, buffer.Messages);
+            Assert.Equal(new byte[] { 1, 2, 3 }, buffer.GetMemory().ToArray());
+        }
+
+        [Fact]
+        public void FailedWriteAfterSuccessDoesNotCorruptBufferContents()
+        {
+            var buffer = new NatsPublishBuffer(new byte[1024]);
+
+            Assert.True(buffer.TryWrite(new WritingMessage(1, 2, 3), out var firstMessageIndex));
+            Assert.Equal(0, firstMessageIndex);
+
+            Assert.Throws<InvalidOperationException>(() =>
+                buffer.TryWrite(new ThrowingMessage(), out _));
+
+            Assert.True(buffer.TryWrite(new WritingMessage(4, 5), out var secondMessageIndex));
+            Assert.Equal(1, secondMessageIndex);
+            Assert.Equal(2, buffer.Messages);
+            Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, buffer.GetMemory().ToArray());
         }
     }
 }
