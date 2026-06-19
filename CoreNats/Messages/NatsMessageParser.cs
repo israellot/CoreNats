@@ -33,18 +33,26 @@
             {
                 var previousPosition = reader.Consumed;
                 if (!reader.TryReadTo(out ReadOnlySpan<byte> line, (byte) '\n')) break;
-                line = line.Slice(0, line.Length - 1); // Slice out \r as well (not just \n)
-                
+                // Strip trailing \r only when present (guards bare \n with nothing before it)
+                if (line.Length > 0 && line[line.Length - 1] == (byte)'\r')
+                    line = line.Slice(0, line.Length - 1);
+                // Skip empty lines (bare \r\n or \n)
+                if (line.Length == 0) continue;
+
                 INatsServerMessage? message = null;
                 bool parsed = true;
                 switch (line[0])
                 {
                     case (byte)'M': parsed = ParseMessageInline(line, ref reader); break;
                     case (byte)'H': parsed = ParseMessageWithHeaderInline(line, ref reader); break;
-                    case (byte)'+': message = ParseOk(); break;                    
+                    case (byte)'+': message = ParseOk(); break;
                     case (byte)'I': message = ParseInformation(line); break;
                     case (byte)'-': message = ParseError(line); break;
-                    case (byte)'P': message = line[1] == (byte)'I' ? ParsePing():ParsePong(); break;
+                    case (byte)'P':
+                        if (line.Length < 2)
+                            throw new ProtocolViolationException($"Unknown message {Encoding.UTF8.GetString(line)}");
+                        message = line[1] == (byte)'I' ? ParsePing() : ParsePong();
+                        break;
                     default:
                         throw new ProtocolViolationException($"Unknown message {Encoding.UTF8.GetString(line)}");
                 }
