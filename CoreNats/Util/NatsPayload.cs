@@ -24,7 +24,7 @@
         public NatsPayload(string? value)
         {
             _string = value ?? string.Empty;
-            Memory = _string == string.Empty ? ReadOnlyMemory<byte>.Empty : Encoding.UTF8.GetBytes(value);
+            Memory = _string == string.Empty ? ReadOnlyMemory<byte>.Empty : Encoding.UTF8.GetBytes(_string);
             Owner = null;
         }
 
@@ -70,6 +70,14 @@
         {
             return Equals(in other);
         }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is NatsPayload other && Equals(in other);
+        }
+
+        public static bool operator ==(NatsPayload left, NatsPayload right) => left.Equals(in right);
+        public static bool operator !=(NatsPayload left, NatsPayload right) => !left.Equals(in right);
 
         public override int GetHashCode()
         {

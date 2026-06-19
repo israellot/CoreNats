@@ -1,4 +1,4 @@
-﻿namespace CoreNats.Messages
+namespace CoreNats.Messages
 {
     using System;
     using System.Collections.Generic;
@@ -129,12 +129,23 @@
                     break;
 
                 var keyEnd = data.Span.IndexOf((byte)':');
+                if (keyEnd < 0)
+                    break; // malformed line: no colon — stop parsing
+
                 var key = data.Slice(0, keyEnd);
                 data = data.Slice(keyEnd + 1);
 
+                // Skip a single optional leading space after the colon (NATS/HTTP convention: "Key: Value").
+                // This makes both "Key:Value" and "Key: Value" yield the same stored value.
+                if (data.Length > 0 && data.Span[0] == (byte)' ')
+                    data = data.Slice(1);
+
                 var valueEnd = data.Span.IndexOf((byte)'\r');
+                if (valueEnd < 0)
+                    break; // malformed line: no CRLF terminator — stop parsing
+
                 var value = data.Slice(0, valueEnd);
-                data = data.Slice(valueEnd + 2); //skip /r/n
+                data = data.Slice(valueEnd + 2); //skip \r\n
 
                 headers.Add(new KeyValuePair<ReadOnlyMemory<byte>, ReadOnlyMemory<byte>>(key, value));
             }
