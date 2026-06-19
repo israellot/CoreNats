@@ -613,7 +613,7 @@
         {
             var unsubscriber = new NatsUnsubscriber();
 
-            _= InternalSubscribe(subject, process, queueGroup, unsubscriber.Token);
+            ObserveSubscribeTask(InternalSubscribe(subject, process, queueGroup, unsubscriber.Token));
 
             return unsubscriber;
         }
@@ -631,9 +631,33 @@
 
             var inner = process==null? EmptyProcess: new NatsMessageInlineProcess((ref msg) => process(msg.Persist()));
 
-            _ = InternalSubscribe(subject, inner, queueGroup, unsubscriber.Token);
+            ObserveSubscribeTask(InternalSubscribe(subject, inner, queueGroup, unsubscriber.Token));
 
             return unsubscriber;
+        }
+
+        /// <summary>
+        /// Observes the fire-and-forget task returned by the synchronous Subscribe() overloads.
+        /// InternalSubscribe's first await (channel write) can fault before the subscription
+        /// lifetime TCS is reached -- e.g. ChannelClosedException or OperationCanceledException on
+        /// a disposed connection. Without observation the exception would be silently swallowed.
+        /// This routes any such fault to ConnectionException (event) and the logger, consistent
+        /// with how WaitAll() handles read/write/process task faults.
+        /// Cancellation (normal unsubscribe path via NatsUnsubscriber.Token) is not an error and
+        /// is intentionally suppressed.
+        /// </summary>
+        internal void ObserveSubscribeTask(ValueTask task)
+        {
+            if (task.IsCompletedSuccessfully)
+                return;
+
+            task.AsTask().ContinueWith(t =>
+            {
+                var ex = t.Exception!;
+                var inner = ex.Flatten().InnerException ?? (Exception)ex;
+                _logger?.LogError(inner, "[{Id}] Exception from Subscribe() background task", Id);
+                ConnectionException?.Invoke(this, inner);
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously | TaskContinuationOptions.OnlyOnFaulted, TaskScheduler.Default);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
