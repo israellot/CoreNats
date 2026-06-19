@@ -24,7 +24,7 @@
         public NatsPayload(string? value)
         {
             _string = value ?? string.Empty;
-            Memory = _string == string.Empty ? ReadOnlyMemory<byte>.Empty : Encoding.UTF8.GetBytes(value);
+            Memory = _string == string.Empty ? ReadOnlyMemory<byte>.Empty : Encoding.UTF8.GetBytes(_string);
             Owner = null;
         }
 
