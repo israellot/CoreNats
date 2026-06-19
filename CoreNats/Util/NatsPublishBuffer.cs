@@ -41,23 +41,24 @@
         {
             messageIndex = -1;
             int start;
+            int length;
             lock (_lock)
             {
-                if ((_length - _position) < msg.Length || _commit) return false;
+                length = msg.Length;
+                if ((_length - _position) < length || _commit) return false;
 
                 Interlocked.Increment(ref _writers);
 
                 //get a slot
                 start = _position;
-                _position += msg.Length;
+                _position += length;
                 messageIndex = _messages;
                 _messages++;
             }
 
-            var writeSlot = _buffer.AsSpan().Slice(start, msg.Length);
-
             try
             {
+                var writeSlot = _buffer.AsSpan().Slice(start, length);
                 msg.Serialize(writeSlot);
             }
             finally

@@ -19,6 +19,17 @@ namespace CoreNats.Tests.Util
                 => throw new InvalidOperationException("Simulated serialize failure");
         }
 
+        private sealed class ChangingLengthMessage : INatsClientMessage
+        {
+            private int _calls;
+
+            public int Length => ++_calls < 3 ? 16 : -1;
+
+            public void Serialize(Span<byte> buffer)
+            {
+            }
+        }
+
         [Fact]
         public async Task CommitCompletesAfterSerializeThrows()
         {
@@ -40,6 +51,22 @@ namespace CoreNats.Tests.Util
                 "Commit() did not complete within 2 seconds – _writers counter was leaked by a throwing Serialize");
 
             // Propagate any unexpected exception from Commit itself
+            await commitTask;
+        }
+
+        [Fact]
+        public async Task CommitCompletesWhenLengthChangesAfterReservation()
+        {
+            var buffer = new NatsPublishBuffer(new byte[1024]);
+
+            Assert.True(buffer.TryWrite(new ChangingLengthMessage(), out _));
+
+            var commitTask = buffer.Commit().AsTask();
+            var winner = await Task.WhenAny(commitTask, Task.Delay(TimeSpan.FromSeconds(2)));
+
+            Assert.True(winner == commitTask,
+                "Commit() did not complete within 2 seconds when Length changed after reservation");
+
             await commitTask;
         }
     }
