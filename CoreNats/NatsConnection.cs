@@ -399,21 +399,26 @@
                 
                 await foreach(var chunk in reader.ReadAllAsync(disconnectToken).ConfigureAwait(false))
                 {
-                    await chunk.Commit();
-
-                    if (chunk.Messages > 0)
+                    try
                     {
-                        var memory = chunk.GetMemory();
+                        await chunk.Commit();
 
-                        Interlocked.Add(ref _senderQueueSize, -memory.Length);
+                        if (chunk.Messages > 0)
+                        {
+                            var memory = chunk.GetMemory();
 
-                        await SocketSend(memory, disconnectToken);
+                            Interlocked.Add(ref _senderQueueSize, -memory.Length);
 
-                        Interlocked.Add(ref _transmitMessagesTotal, chunk.Messages);
-                        Interlocked.Add(ref _transmitBytesTotal, memory.Length);
+                            await SocketSend(memory, disconnectToken);
+
+                            Interlocked.Add(ref _transmitMessagesTotal, chunk.Messages);
+                            Interlocked.Add(ref _transmitBytesTotal, memory.Length);
+                        }
                     }
-
-                    _senderChannel.Return(chunk);
+                    finally
+                    {
+                        _senderChannel.Return(chunk);
+                    }
                 }
             
             }
